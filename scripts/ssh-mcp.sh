@@ -13,11 +13,12 @@ control_socket="${tunnel_dir}/ssh-control"
 mkdir -p "$tunnel_dir"
 chmod 700 "$tunnel_dir"
 
-if ! ssh -S "$control_socket" -O check "$ssh_host" >/dev/null 2>&1; then
+if ! ssh -n -S "$control_socket" -O check "$ssh_host" >/dev/null 2>&1; then
   if [ -e "$control_socket" ]; then
     mv "$control_socket" "${control_socket}.stale.$(date +%s)"
   fi
   ssh \
+    -n \
     -M \
     -S "$control_socket" \
     -o ControlPersist=600 \
@@ -27,7 +28,7 @@ if ! ssh -S "$control_socket" -O check "$ssh_host" >/dev/null 2>&1; then
     "$ssh_host"
 fi
 
-codebuddy_gateway_token="$(ssh "$ssh_host" "$remote_codebuddy config get gateway.password" | tr -d '\r\n')"
+codebuddy_gateway_token="$(ssh -n "$ssh_host" "$remote_codebuddy config get gateway.password" | tr -d '\r\n')"
 if [ -z "$codebuddy_gateway_token" ]; then
   echo "CodeBuddy Gateway password is missing on the remote worker." >&2
   exit 1
