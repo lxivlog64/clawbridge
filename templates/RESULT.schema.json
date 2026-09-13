@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/workbuddy-bridge/result.schema.json",
+  "title": "WorkBuddy Git handoff result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "branch", "commit", "tests", "open_issues"],
+  "properties": {
+    "status": { "enum": ["completed", "blocked"] },
+    "branch": { "type": "string", "minLength": 1 },
+    "commit": { "type": "string" },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "passed", "summary"],
+      "properties": {
+        "command": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "summary": { "type": "string" }
+      }
+    },
+    "open_issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "name": "clawbridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP bridge for delegating Codex development tasks to CodeBuddy Code or WorkBuddy workers.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lxivlog64/clawbridge.git"
+  },
+  "homepage": "https://github.com/lxivlog64/clawbridge#readme",
+  "bugs": {
+    "url": "https://github.com/lxivlog64/clawbridge/issues"
+  },
+  "keywords": ["codex", "codebuddy", "workbuddy", "mcp", "agent"],
+  "type": "module",
+  "bin": {
+    "clawbridge": "dist/src/cli.js",
+    "clawbridge-mcp": "dist/src/server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/src/server.js",
+    "cli": "node dist/src/cli.js",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.6.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^7.0.2"
+  }
+}
