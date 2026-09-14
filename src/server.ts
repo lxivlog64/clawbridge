@@ -89,16 +89,21 @@ server.tool(
     }
     const spec = tasks.getSpec(taskId);
     if (!spec) throw new Error("Task specification is unavailable; do not dispatch this task.");
-    tasks.markExecution(taskId, "dispatching");
+    const worker = projects.workerFor(task.projectId);
+    const prepared = await prepareWorktree(taskId, project, worker);
+    if (!prepared.ok) {
+      return json({ task: tasks.markExecution(taskId, "failed", prepared.reason), dispatch: "not_started" });
+    }
+    tasks.markPrepared(taskId, prepared.worktreePath, prepared.baseSha, prepared.branch);
     try {
       const job = await codeBuddy.dispatchJob({
-        cwd: project.remoteRepositoryPath,
-        prompt: `ClawBridge task ${taskId}\n\n${spec}\n\nWork only in the isolated worktree. Do not merge, deploy, release, or access credentials. Commit the completed work and report exact test commands and commit SHA.`,
+        cwd: prepared.worktreePath,
+        prompt: `ClawBridge task ${taskId}\nBase SHA: ${prepared.baseSha}\nTask branch: ${prepared.branch}\n\n${spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Commit the completed work and report exact test commands and commit SHA.`,
         model: task.requestedModel,
         effort,
         permissionMode: permissionMode(project.permissionProfile),
         name: `clawbridge-${taskId}`,
-        bgIsolation: "worktree",
+        bgIsolation: "none",
       });
       if (!job.id) throw new Error("CodeBuddy gateway returned no job id.");
       return json({ task: tasks.markDispatched(taskId, job.id), remote: { id: job.id, state: job.state } });
@@ -458,4 +463,34 @@ function requireRemoteTask(taskId: string) {
   if (!task) throw new Error(`Unknown task id ${taskId}.`);
   if (!task.remoteJobId) throw new Error(`Task ${taskId} has no remote job.`);
   return task;
+}
+
+async function prepareWorktree(
+  taskId: string,
+  project: ReturnType<typeof projects.require>,
+  worker: ReturnType<typeof projects.workerFor>,
+): Promise<{ ok: true; worktreePath: string; baseSha: string; branch: string } | { ok: false; reason: string }> {
+  const repositoryPath = project.remoteRepositoryPath;
+  const worktreePath = `${repositoryPath}/.clawbridge-worktrees/${taskId}`;
+  const branch = `clawbridge/${taskId}`;
+  const withinProject = projects.allowsPath(project.id, worktreePath);
+  if (!withinProject) return { ok: false, reason: "Generated worktree path is outside the worker allowlist." };
+  const [repository, status] = await Promise.all([
+    remoteWorker.git(worker, repositoryPath, ["rev-parse", "--is-inside-work-tree"]),
+    remoteWorker.git(worker, repositoryPath, ["status", "--porcelain"]),
+  ]);
+  if (repository.exitCode !== 0 || repository.stdout.trim() !== "true") return { ok: false, reason: "Registered remote repository is not a Git worktree." };
+  if (status.exitCode !== 0 || status.stdout.trim()) return { ok: false, reason: "Registered remote repository has uncommitted changes; handoff is required." };
+  const fetched = await remoteWorker.git(worker, repositoryPath, ["fetch", "--no-tags", "origin", project.defaultBranch]);
+  if (fetched.exitCode !== 0) return { ok: false, reason: `Cannot fetch base branch: ${fetched.stderr.slice(-1_000)}` };
+  const base = await remoteWorker.git(worker, repositoryPath, ["rev-parse", `origin/${project.defaultBranch}`]);
+  const baseSha = base.stdout.trim();
+  if (base.exitCode !== 0 || !/^[0-9a-f]{40}$/i.test(baseSha)) return { ok: false, reason: "Cannot resolve a fixed base SHA." };
+  const mkdir = await remoteWorker.mkdir(worker, `${repositoryPath}/.clawbridge-worktrees`);
+  if (mkdir.exitCode !== 0) return { ok: false, reason: `Cannot create worktree directory: ${mkdir.stderr.slice(-1_000)}` };
+  const created = await remoteWorker.git(worker, repositoryPath, ["worktree", "add", "--detach", worktreePath, baseSha]);
+  if (created.exitCode !== 0) return { ok: false, reason: `Cannot create task worktree: ${created.stderr.slice(-1_000)}` };
+  const checkout = await remoteWorker.git(worker, worktreePath, ["switch", "-c", branch]);
+  if (checkout.exitCode !== 0) return { ok: false, reason: `Cannot create task branch: ${checkout.stderr.slice(-1_000)}` };
+  return { ok: true, worktreePath, baseSha, branch };
 }

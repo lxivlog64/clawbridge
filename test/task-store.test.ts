@@ -29,6 +29,9 @@ test("task store persists queued work and deduplicates identical requests", asyn
   assert.equal(dispatched.remoteJobId, "remote-job-1");
   assert.equal(secondStore.activeCount("sample-app"), 1);
   assert.equal(secondStore.markExecution(first.task.taskId, "cancel_requested").executionState, "cancel_requested");
+  const prepared = secondStore.markPrepared(first.task.taskId, "/srv/projects/sample/.clawbridge-worktrees/task", "b".repeat(40), "clawbridge/task");
+  assert.equal(prepared.baseSha, "b".repeat(40));
+  assert.equal(prepared.branch, "clawbridge/task");
   const verified = secondStore.markVerified(first.task.taskId, "/srv/projects/sample/.worktrees/task", "a".repeat(40));
   assert.equal(verified.headSha, "a".repeat(40));
   assert.equal(secondStore.markDelivery(first.task.taskId, "ready", { prUrl: "https://example.test/pr/1" }).prUrl, "https://example.test/pr/1");

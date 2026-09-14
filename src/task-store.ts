@@ -19,6 +19,8 @@ export interface TaskRecord {
   worktreePath?: string;
   headSha?: string;
   prUrl?: string;
+  baseSha?: string;
+  branch?: string;
   createdAt: string;
   updatedAt: string;
   executionState: ExecutionState;
@@ -47,6 +49,8 @@ interface TaskRow {
   worktree_path: string | null;
   head_sha: string | null;
   pr_url: string | null;
+  base_sha: string | null;
+  branch: string | null;
   created_at: string;
   updated_at: string;
   execution_state: ExecutionState;
@@ -78,6 +82,8 @@ export class TaskStore {
         worktree_path TEXT,
         head_sha TEXT,
         pr_url TEXT,
+        base_sha TEXT,
+        branch TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         execution_state TEXT NOT NULL,
@@ -98,6 +104,8 @@ export class TaskStore {
     this.ensureColumn("worktree_path", "TEXT");
     this.ensureColumn("head_sha", "TEXT");
     this.ensureColumn("pr_url", "TEXT");
+    this.ensureColumn("base_sha", "TEXT");
+    this.ensureColumn("branch", "TEXT");
   }
 
   createOrGet(input: { projectId: string; spec: string; idempotencyKey: string; requestedModel?: string }): { task: TaskRecord; reused: boolean } {
@@ -168,6 +176,10 @@ export class TaskStore {
     return this.update(taskId, { executionState: "running", remoteJobId, blockReason: undefined, lastEventAt: new Date().toISOString() });
   }
 
+  markPrepared(taskId: string, worktreePath: string, baseSha: string, branch: string): TaskRecord {
+    return this.update(taskId, { executionState: "dispatching", worktreePath, baseSha, branch, lastEventAt: new Date().toISOString() });
+  }
+
   markExecution(taskId: string, executionState: ExecutionState, blockReason?: string): TaskRecord {
     return this.update(taskId, { executionState, blockReason, lastEventAt: new Date().toISOString() });
   }
@@ -187,15 +199,16 @@ export class TaskStore {
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
   }
 
-  private update(taskId: string, patch: { executionState?: ExecutionState; deliveryState?: DeliveryState; remoteJobId?: string; blockReason?: string; lastEventAt?: string; worktreePath?: string; headSha?: string; prUrl?: string }): TaskRecord {
+  private update(taskId: string, patch: { executionState?: ExecutionState; deliveryState?: DeliveryState; remoteJobId?: string; blockReason?: string; lastEventAt?: string; worktreePath?: string; headSha?: string; prUrl?: string; baseSha?: string; branch?: string }): TaskRecord {
     const existing = this.get(taskId);
     if (!existing) throw new Error(`Unknown task id ${taskId}.`);
     const now = new Date().toISOString();
-    this.db.prepare(`UPDATE tasks SET execution_state = ?, delivery_state = ?, remote_job_id = ?, block_reason = ?, last_event_at = ?, worktree_path = ?, head_sha = ?, pr_url = ?, updated_at = ? WHERE task_id = ?`)
+    this.db.prepare(`UPDATE tasks SET execution_state = ?, delivery_state = ?, remote_job_id = ?, block_reason = ?, last_event_at = ?, worktree_path = ?, head_sha = ?, pr_url = ?, base_sha = ?, branch = ?, updated_at = ? WHERE task_id = ?`)
       .run(patch.executionState ?? existing.executionState, patch.deliveryState ?? existing.deliveryState,
         patch.remoteJobId ?? existing.remoteJobId ?? null, patch.blockReason ?? null,
         patch.lastEventAt ?? existing.lastEventAt ?? null, patch.worktreePath ?? existing.worktreePath ?? null,
-        patch.headSha ?? existing.headSha ?? null, patch.prUrl ?? existing.prUrl ?? null, now, taskId);
+        patch.headSha ?? existing.headSha ?? null, patch.prUrl ?? existing.prUrl ?? null,
+        patch.baseSha ?? existing.baseSha ?? null, patch.branch ?? existing.branch ?? null, now, taskId);
     const updated = this.get(taskId)!;
     if (updated.executionState !== existing.executionState || updated.deliveryState !== existing.deliveryState || updated.blockReason !== existing.blockReason) {
       this.emit(taskId, "task.state_changed", `${existing.executionState}/${existing.deliveryState} → ${updated.executionState}/${updated.deliveryState}${updated.blockReason ? `: ${updated.blockReason.slice(0, 500)}` : ""}`);
@@ -222,6 +235,8 @@ function taskFromRow(row: TaskRow): TaskRecord {
     ...(row.worktree_path ? { worktreePath: row.worktree_path } : {}),
     ...(row.head_sha ? { headSha: row.head_sha } : {}),
     ...(row.pr_url ? { prUrl: row.pr_url } : {}),
+    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
+    ...(row.branch ? { branch: row.branch } : {}),
     createdAt: row.created_at, updatedAt: row.updated_at, executionState: row.execution_state,
     deliveryState: row.delivery_state, reviewState: row.review_state,
   };

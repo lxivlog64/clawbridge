@@ -20,7 +20,11 @@ export class RemoteWorker {
     return this.run(worker, "gh", args, cwd);
   }
 
-  private async run(worker: RegisteredWorker, program: "git" | "gh", args: string[], cwd: string): Promise<RemoteCommandResult> {
+  async mkdir(worker: RegisteredWorker, directory: string): Promise<RemoteCommandResult> {
+    return this.run(worker, "mkdir", ["-p", directory]);
+  }
+
+  private async run(worker: RegisteredWorker, program: "git" | "gh" | "mkdir", args: string[], cwd?: string): Promise<RemoteCommandResult> {
     const payload = Buffer.from(JSON.stringify({ program, args, cwd }), "utf8").toString("base64url");
     const helper = "const{spawnSync}=require('node:child_process');const p=JSON.parse(Buffer.from(process.argv[1],'base64url').toString('utf8'));const r=spawnSync(p.program,p.args,{cwd:p.cwd,encoding:'utf8',timeout:120000});process.stdout.write(JSON.stringify({exitCode:r.status??1,stdout:r.stdout??'',stderr:r.stderr??r.error?.message??''}));";
     const command = `node -e ${shellQuote(helper)} ${payload}`;
