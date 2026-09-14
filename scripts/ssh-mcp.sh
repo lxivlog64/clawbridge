@@ -14,7 +14,8 @@ case "$local_port:$remote_port:$ssh_port" in
 esac
 instance_material="${CLAWBRIDGE_INSTANCE:-${ssh_host}-${ssh_port}-${local_port}-${remote_port}}"
 instance_key="$(printf '%s' "$instance_material" | cksum | awk '{print $1}')"
-tunnel_dir="${TMPDIR:-/tmp}/clawbridge-${user_id}-${instance_key}"
+tunnel_root="${CLAWBRIDGE_TUNNEL_ROOT:-/tmp}"
+tunnel_dir="${tunnel_root}/clawbridge-${user_id}-${instance_key}"
 control_socket="${tunnel_dir}/ssh-control"
 lock_dir="${tunnel_dir}/startup.lock"
 

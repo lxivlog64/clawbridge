@@ -22,6 +22,7 @@
 | `CLAWBRIDGE_REMOTE_CODEBUDDY` | `codebuddy` | 远端 CodeBuddy 可执行文件路径 |
 | `CLAWBRIDGE_SSH_PORT` | `22` | SSH 端口；SSH 别名另有端口时保持一致 |
 | `CLAWBRIDGE_INSTANCE` | 根据主机和端口生成 | 实例标识，用于隔离 SSH 控制连接 |
+| `CLAWBRIDGE_TUNNEL_ROOT` | `/tmp` | SSH 控制 socket 的短路径根目录；避免 macOS 长临时目录路径超限 |
 
 ### 项目台账（M1）
 
