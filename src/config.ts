@@ -16,6 +16,7 @@ export interface BridgeConfig {
   projectsFile: string;
   taskDatabaseFile: string;
   coordinatorPollMs: number;
+  notificationWebhookUrl?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -54,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     projectsFile: path.resolve(env.CLAWBRIDGE_PROJECTS_FILE ?? path.join(stateDir, "projects.json")),
     taskDatabaseFile: path.resolve(env.CLAWBRIDGE_TASK_DATABASE ?? path.join(stateDir, "tasks.sqlite")),
     coordinatorPollMs: positiveInteger(env.CLAWBRIDGE_COORDINATOR_POLL_MS, 15_000, "CLAWBRIDGE_COORDINATOR_POLL_MS"),
+    ...(env.CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL ? { notificationWebhookUrl: env.CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL } : {}),
   };
 }
 

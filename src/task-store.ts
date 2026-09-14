@@ -37,6 +37,8 @@ export interface TaskEvent {
   summary: string;
   createdAt: string;
   deliveredAt?: string;
+  attempts: number;
+  nextAttemptAt?: string;
 }
 
 interface TaskRow {
@@ -99,7 +101,8 @@ export class TaskStore {
       CREATE INDEX IF NOT EXISTS tasks_project_created ON tasks(project_id, created_at DESC);
       CREATE TABLE IF NOT EXISTS task_events (
         event_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
-        summary TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
+        summary TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT
       );
       CREATE INDEX IF NOT EXISTS task_events_pending ON task_events(delivered_at, created_at ASC);
     `);
@@ -114,6 +117,8 @@ export class TaskStore {
     this.ensureColumn("branch", "TEXT");
     this.ensureColumn("reviewed_sha", "TEXT");
     this.ensureColumn("review_note", "TEXT");
+    this.ensureEventColumn("attempts", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureEventColumn("next_attempt_at", "TEXT");
   }
 
   createOrGet(input: { projectId: string; spec: string; idempotencyKey: string; requestedModel?: string }): { task: TaskRecord; reused: boolean } {
@@ -164,13 +169,27 @@ export class TaskStore {
 
   listEvents(limit: number, pendingOnly = false): TaskEvent[] {
     const where = pendingOnly ? "WHERE delivered_at IS NULL" : "";
-    const rows = this.db.prepare(`SELECT * FROM task_events ${where} ORDER BY created_at ASC LIMIT ?`).all(limit) as Array<{ event_id: string; task_id: string; kind: string; summary: string; created_at: string; delivered_at: string | null }>;
-    return rows.map((row) => ({ eventId: row.event_id, taskId: row.task_id, kind: row.kind, summary: row.summary, createdAt: row.created_at, ...(row.delivered_at ? { deliveredAt: row.delivered_at } : {}) }));
+    const rows = this.db.prepare(`SELECT * FROM task_events ${where} ORDER BY created_at ASC LIMIT ?`).all(limit) as Array<{ event_id: string; task_id: string; kind: string; summary: string; created_at: string; delivered_at: string | null; attempts: number; next_attempt_at: string | null }>;
+    return rows.map((row) => ({ eventId: row.event_id, taskId: row.task_id, kind: row.kind, summary: row.summary, createdAt: row.created_at, attempts: row.attempts, ...(row.delivered_at ? { deliveredAt: row.delivered_at } : {}), ...(row.next_attempt_at ? { nextAttemptAt: row.next_attempt_at } : {}) }));
+  }
+
+  listDeliverableEvents(limit: number): TaskEvent[] {
+    const rows = this.db.prepare("SELECT * FROM task_events WHERE delivered_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC LIMIT ?").all(new Date().toISOString(), limit) as Array<{ event_id: string; task_id: string; kind: string; summary: string; created_at: string; delivered_at: string | null; attempts: number; next_attempt_at: string | null }>;
+    return rows.map((row) => ({ eventId: row.event_id, taskId: row.task_id, kind: row.kind, summary: row.summary, createdAt: row.created_at, attempts: row.attempts, ...(row.next_attempt_at ? { nextAttemptAt: row.next_attempt_at } : {}) }));
   }
 
   acknowledgeEvent(eventId: string): boolean {
     return this.db.prepare("UPDATE task_events SET delivered_at = ? WHERE event_id = ? AND delivered_at IS NULL")
       .run(new Date().toISOString(), eventId).changes === 1;
+  }
+
+  deferEvent(eventId: string): void {
+    const event = this.db.prepare("SELECT attempts FROM task_events WHERE event_id = ?").get(eventId) as { attempts: number } | undefined;
+    if (!event) return;
+    const attempts = event.attempts + 1;
+    const delayMs = Math.min(300_000, 5_000 * 2 ** Math.min(attempts, 6));
+    this.db.prepare("UPDATE task_events SET attempts = ?, next_attempt_at = ? WHERE event_id = ? AND delivered_at IS NULL")
+      .run(attempts, new Date(Date.now() + delayMs).toISOString(), eventId);
   }
 
   activeCount(projectId: string): number {
@@ -214,6 +233,11 @@ export class TaskStore {
   private ensureColumn(column: string, definition: string): void {
     const columns = this.db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
+  }
+
+  private ensureEventColumn(column: string, definition: string): void {
+    const columns = this.db.prepare("PRAGMA table_info(task_events)").all() as Array<{ name: string }>;
+    if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE task_events ADD COLUMN ${column} ${definition}`);
   }
 
   private update(taskId: string, patch: { executionState?: ExecutionState; deliveryState?: DeliveryState; reviewState?: ReviewState; remoteJobId?: string; blockReason?: string; lastEventAt?: string; worktreePath?: string; headSha?: string; prUrl?: string; baseSha?: string; branch?: string; reviewedSha?: string; reviewNote?: string }): TaskRecord {
