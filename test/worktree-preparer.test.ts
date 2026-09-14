@@ -30,7 +30,7 @@ test("preparer fixes the base SHA and creates a dedicated worktree branch", asyn
   const result = await prepareWorktree("123e4567-e89b-12d3-a456-426614174000", project, worker, remote, () => true);
   assert.deepEqual(result, {
     ok: true, baseSha: "a".repeat(40), branch: "clawbridge/123e4567-e89b-12d3-a456-426614174000",
-    worktreePath: "/srv/projects/app/.clawbridge-worktrees/123e4567-e89b-12d3-a456-426614174000",
+    worktreePath: "/srv/projects/app.clawbridge-worktrees/123e4567-e89b-12d3-a456-426614174000",
   });
   assert.ok(calls.some((args) => args[0] === "fetch"));
   assert.ok(calls.some((args) => args[0] === "worktree"));

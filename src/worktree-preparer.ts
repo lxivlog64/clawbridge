@@ -18,7 +18,9 @@ export async function prepareWorktree(
   allowsPath: (candidate: string) => boolean,
 ): Promise<PrepareResult> {
   const repositoryPath = project.remoteRepositoryPath;
-  const worktreePath = `${repositoryPath}/.clawbridge-worktrees/${taskId}`;
+  // Keep worktrees beside, rather than inside, the source checkout. Otherwise
+  // the worktree container itself appears as an untracked source-tree change.
+  const worktreePath = `${repositoryPath}.clawbridge-worktrees/${taskId}`;
   const branch = `clawbridge/${taskId}`;
   if (!allowsPath(worktreePath)) return { ok: false, reason: "Generated worktree path is outside the worker allowlist." };
   const [repository, status] = await Promise.all([
@@ -32,7 +34,7 @@ export async function prepareWorktree(
   const base = await remote.git(worker, repositoryPath, ["rev-parse", `${project.deliveryRemote}/${project.defaultBranch}`]);
   const baseSha = base.stdout.trim();
   if (base.exitCode !== 0 || !/^[0-9a-f]{40}$/i.test(baseSha)) return { ok: false, reason: "Cannot resolve a fixed base SHA." };
-  const mkdir = await remote.mkdir(worker, `${repositoryPath}/.clawbridge-worktrees`);
+  const mkdir = await remote.mkdir(worker, `${repositoryPath}.clawbridge-worktrees`);
   if (mkdir.exitCode !== 0) return { ok: false, reason: `Cannot create worktree directory: ${mkdir.stderr.slice(-1_000)}` };
   const created = await remote.git(worker, repositoryPath, ["worktree", "add", "--detach", worktreePath, baseSha]);
   if (created.exitCode !== 0) return { ok: false, reason: `Cannot create task worktree: ${created.stderr.slice(-1_000)}` };
