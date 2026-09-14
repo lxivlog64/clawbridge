@@ -72,6 +72,16 @@ export CODEBUDDY_BASE_URL=http://127.0.0.1:8080/api/v1
 export CODEBUDDY_GATEWAY_TOKEN='替换为 Gateway 密码'
 ```
 
+可选的传输边界（默认请求超时 30 秒、单次响应最多 1 MiB、回传记录最多 16 KiB）：
+
+```bash
+export CODEBUDDY_REQUEST_TIMEOUT_MS=30000
+export CODEBUDDY_MAX_RESPONSE_BYTES=1048576
+export CODEBUDDY_TRANSCRIPT_MAX_BYTES=16384
+```
+
+回传记录会优先保留最新且可容纳的事件，默认不返回模型思考事件。它用于定位进度，不是完成或测试证明。
+
 登记到 Codex：
 
 ```bash
@@ -114,6 +124,8 @@ Host codebuddy-worker
 ```bash
 export CLAWBRIDGE_SSH_HOST=codebuddy-worker
 export CLAWBRIDGE_REMOTE_CODEBUDDY=codebuddy
+# 如 SSH 配置未指定端口，可显式设置；默认 22。
+export CLAWBRIDGE_SSH_PORT=22
 
 codex mcp add clawbridge --env CLAWBRIDGE_SSH_HOST="$CLAWBRIDGE_SSH_HOST" \
   --env CLAWBRIDGE_REMOTE_CODEBUDDY="$CLAWBRIDGE_REMOTE_CODEBUDDY" \
@@ -125,6 +137,7 @@ codex mcp add clawbridge --env CLAWBRIDGE_SSH_HOST="$CLAWBRIDGE_SSH_HOST" \
 - 将本机 `127.0.0.1:18080` 转发到远端 `127.0.0.1:8080`；
 - 通过 SSH 临时读取 Gateway 密码；
 - 把密码仅放入 ClawBridge 进程环境，不写入项目文件。
+- 使用 SSH 批处理、连接超时与启动锁，避免多个同实例启动器互相抢占。
 
 所有远程选项见[完整配置指南](docs/configuration.zh-CN.md)。
 

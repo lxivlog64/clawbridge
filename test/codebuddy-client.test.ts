@@ -11,6 +11,9 @@ const config: BridgeConfig = {
   apiBaseUrl: "https://www.workbuddy.cn/openapi/v2",
   codeBuddyBaseUrl: "http://127.0.0.1:18080/api/v1",
   codeBuddyToken: "gateway-password",
+  codeBuddyRequestTimeoutMs: 1_000,
+  codeBuddyMaxResponseBytes: 10_000,
+  codeBuddyTranscriptMaxBytes: 100,
 };
 
 test("CodeBuddy client dispatches a model-pinned isolated job", async () => {
@@ -45,4 +48,38 @@ test("CodeBuddy client dispatches a model-pinned isolated job", async () => {
     permissionMode: "default",
     bgIsolation: "worktree",
   });
+});
+
+test("CodeBuddy client unwraps the GET job envelope used by the gateway", async () => {
+  const fetchFn = (async () => new Response(
+    JSON.stringify({ data: { job: { id: "job-2", state: "done" } } }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
+  const result = await new CodeBuddyClient(config, fetchFn).getJob("job-2");
+  assert.deepEqual(result, { id: "job-2", state: "done" });
+});
+
+test("CodeBuddy client bounds transcript data returned to MCP", async () => {
+  const fetchFn = (async () => new Response(
+    JSON.stringify({ data: { updates: ["x".repeat(80), "y".repeat(80)] } }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
+  const result = await new CodeBuddyClient(config, fetchFn).transcript("job-3");
+  assert.equal(result.truncated, true);
+  assert.deepEqual(result.updates, ["y".repeat(80)]);
+  assert.equal(result.omittedUpdates, 1);
+});
+
+test("CodeBuddy client does not return model thought events by default", async () => {
+  const fetchFn = (async () => new Response(
+    JSON.stringify({ data: { updates: [
+      { type: "thought", content: "private reasoning" },
+      { type: "tool_result", content: "npm test passed" },
+    ] } }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  )) as typeof fetch;
+  const result = await new CodeBuddyClient(config, fetchFn).transcript("job-4");
+  assert.deepEqual(result.updates, [{ type: "tool_result", content: "npm test passed" }]);
+  assert.equal(result.truncated, true);
+  assert.equal(result.omittedUpdates, 1);
 });

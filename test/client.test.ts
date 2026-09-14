@@ -17,6 +17,9 @@ test("client sends a local-assistant message with bearer auth", async () => {
     apiBaseUrl: "https://example.test/openapi/v2",
     codeBuddyBaseUrl: "http://127.0.0.1:8080/api/v1",
     codeBuddyToken: "",
+    codeBuddyRequestTimeoutMs: 1_000,
+    codeBuddyMaxResponseBytes: 10_000,
+    codeBuddyTranscriptMaxBytes: 16_384,
   };
   const store = new TokenStore(config.tokenFile);
   await store.saveToken({

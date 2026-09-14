@@ -1,12 +1,8 @@
 import type { BridgeConfig } from "./config.js";
 
-interface CodeBuddyEnvelope<T> {
-  data: T;
-}
+interface CodeBuddyEnvelope<T> { data: T }
 
-interface CodeBuddyErrorEnvelope {
-  error?: { code?: string; message?: string };
-}
+interface CodeBuddyErrorEnvelope { error?: { code?: string; message?: string } }
 
 export interface CodeBuddyJobRequest {
   prompt: string;
@@ -33,6 +29,15 @@ export interface CodeBuddyJob {
 export interface CodeBuddyTranscript {
   sessionId?: string;
   updates: unknown[];
+  truncated?: boolean;
+  omittedUpdates?: number;
+}
+
+export class CodeBuddyApiError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+    this.name = "CodeBuddyApiError";
+  }
 }
 
 export class CodeBuddyClient {
@@ -55,17 +60,20 @@ export class CodeBuddyClient {
   }
 
   async getJob(id: string): Promise<CodeBuddyJob> {
-    const envelope = await this.request<CodeBuddyEnvelope<CodeBuddyJob>>(
+    const envelope = await this.request<CodeBuddyEnvelope<CodeBuddyJob | { job: CodeBuddyJob }>>(
       `/jobs/${encodeURIComponent(id)}`,
     );
-    return envelope.data;
+    // The gateway returns { data: { job: ... } } for GET /jobs/:id, while
+    // POST /jobs returns { data: job }. Keep accepting both documented forms.
+    const data = envelope.data;
+    return isJobWrapper(data) ? data.job : data;
   }
 
   async transcript(id: string): Promise<CodeBuddyTranscript> {
     const envelope = await this.request<CodeBuddyEnvelope<CodeBuddyTranscript>>(
       `/jobs/${encodeURIComponent(id)}/transcript`,
     );
-    return envelope.data;
+    return limitTranscript(envelope.data, this.config.codeBuddyTranscriptMaxBytes);
   }
 
   async reply(id: string, text: string): Promise<unknown> {
@@ -94,24 +102,95 @@ export class CodeBuddyClient {
         "Missing CODEBUDDY_GATEWAY_TOKEN. Use the password printed by codebuddy --serve.",
       );
     }
-    const response = await this.fetchFn(`${this.config.codeBuddyBaseUrl}${path}`, {
-      ...init,
-      headers: {
-        accept: "application/json",
-        "X-CodeBuddy-Request": "1",
-        ...(init.body ? { "content-type": "application/json" } : {}),
-        ...(this.config.codeBuddyToken
-          ? { authorization: `Bearer ${this.config.codeBuddyToken}` }
-          : {}),
-        ...init.headers,
-      },
-    });
-    const body = (await response.json()) as T & CodeBuddyErrorEnvelope;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.codeBuddyRequestTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetchFn(`${this.config.codeBuddyBaseUrl}${path}`, {
+        ...init,
+        signal: controller.signal,
+        headers: {
+          accept: "application/json",
+          "X-CodeBuddy-Request": "1",
+          ...(init.body ? { "content-type": "application/json" } : {}),
+          ...(this.config.codeBuddyToken
+            ? { authorization: `Bearer ${this.config.codeBuddyToken}` }
+            : {}),
+          ...init.headers,
+        },
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new CodeBuddyApiError(
+          `CodeBuddy API request timed out after ${this.config.codeBuddyRequestTimeoutMs}ms.`,
+        );
+      }
+      throw new CodeBuddyApiError(`CodeBuddy API connection failed: ${errorMessage(error)}`);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    const raw = await response.text();
+    if (Buffer.byteLength(raw, "utf8") > this.config.codeBuddyMaxResponseBytes) {
+      throw new CodeBuddyApiError(
+        `CodeBuddy API response exceeded ${this.config.codeBuddyMaxResponseBytes} bytes.`,
+        response.status,
+      );
+    }
+    let body: T & CodeBuddyErrorEnvelope;
+    try {
+      body = JSON.parse(raw) as T & CodeBuddyErrorEnvelope;
+    } catch {
+      throw new CodeBuddyApiError("CodeBuddy API returned invalid JSON.", response.status);
+    }
     if (!response.ok || body.error) {
-      throw new Error(
-        `CodeBuddy API request failed (${response.status}): ${JSON.stringify(body)}`,
+      const detail = body.error?.message ?? body.error?.code ?? "unspecified gateway error";
+      throw new CodeBuddyApiError(
+        `CodeBuddy API request failed (${response.status}): ${detail}`,
+        response.status,
       );
     }
     return body;
   }
+}
+
+function isJobWrapper(value: CodeBuddyJob | { job: CodeBuddyJob }): value is { job: CodeBuddyJob } {
+  return typeof value === "object" && value !== null && "job" in value;
+}
+
+function limitTranscript(transcript: CodeBuddyTranscript, maxBytes: number): CodeBuddyTranscript {
+  const kept: unknown[] = [];
+  let used = 0;
+  let omitted = 0;
+  for (let index = transcript.updates.length - 1; index >= 0; index -= 1) {
+    const update = transcript.updates[index];
+    if (isThoughtUpdate(update)) {
+      omitted += 1;
+      continue;
+    }
+    const serialized = JSON.stringify(update);
+    const size = Buffer.byteLength(serialized ?? "null", "utf8");
+    if (size > maxBytes || used + size > maxBytes) {
+      omitted += 1;
+      continue;
+    }
+    kept.unshift(update);
+    used += size;
+  }
+  return {
+    ...transcript,
+    updates: kept,
+    ...(omitted > 0 ? { truncated: true, omittedUpdates: omitted } : {}),
+  };
+}
+
+function isThoughtUpdate(update: unknown): boolean {
+  if (typeof update !== "object" || update === null) return false;
+  const record = update as Record<string, unknown>;
+  return [record.type, record.kind, record.event, record.role]
+    .some((value) => typeof value === "string" && /thought|reasoning/i.test(value));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown connection error";
 }
