@@ -21,6 +21,8 @@ export interface TaskRecord {
   prUrl?: string;
   baseSha?: string;
   branch?: string;
+  reviewedSha?: string;
+  reviewNote?: string;
   createdAt: string;
   updatedAt: string;
   executionState: ExecutionState;
@@ -51,6 +53,8 @@ interface TaskRow {
   pr_url: string | null;
   base_sha: string | null;
   branch: string | null;
+  reviewed_sha: string | null;
+  review_note: string | null;
   created_at: string;
   updated_at: string;
   execution_state: ExecutionState;
@@ -84,6 +88,8 @@ export class TaskStore {
         pr_url TEXT,
         base_sha TEXT,
         branch TEXT,
+        reviewed_sha TEXT,
+        review_note TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         execution_state TEXT NOT NULL,
@@ -106,6 +112,8 @@ export class TaskStore {
     this.ensureColumn("pr_url", "TEXT");
     this.ensureColumn("base_sha", "TEXT");
     this.ensureColumn("branch", "TEXT");
+    this.ensureColumn("reviewed_sha", "TEXT");
+    this.ensureColumn("review_note", "TEXT");
   }
 
   createOrGet(input: { projectId: string; spec: string; idempotencyKey: string; requestedModel?: string }): { task: TaskRecord; reused: boolean } {
@@ -172,6 +180,11 @@ export class TaskStore {
     return row.count;
   }
 
+  listRecoverable(): TaskRecord[] {
+    const rows = this.db.prepare("SELECT * FROM tasks WHERE remote_job_id IS NOT NULL AND execution_state IN ('dispatching', 'running', 'waiting_input', 'waiting_permission', 'stalled', 'cancel_requested', 'unknown') ORDER BY updated_at ASC").all() as TaskRow[];
+    return rows.map(taskFromRow);
+  }
+
   markDispatched(taskId: string, remoteJobId: string): TaskRecord {
     return this.update(taskId, { executionState: "running", remoteJobId, blockReason: undefined, lastEventAt: new Date().toISOString() });
   }
@@ -192,6 +205,10 @@ export class TaskStore {
     return this.update(taskId, { deliveryState, prUrl: patch.prUrl, blockReason: patch.blockReason });
   }
 
+  markReview(taskId: string, reviewState: ReviewState, reviewedSha?: string, reviewNote?: string): TaskRecord {
+    return this.update(taskId, { reviewState, reviewedSha, reviewNote });
+  }
+
   close(): void { this.db.close(); }
 
   private ensureColumn(column: string, definition: string): void {
@@ -199,19 +216,20 @@ export class TaskStore {
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
   }
 
-  private update(taskId: string, patch: { executionState?: ExecutionState; deliveryState?: DeliveryState; remoteJobId?: string; blockReason?: string; lastEventAt?: string; worktreePath?: string; headSha?: string; prUrl?: string; baseSha?: string; branch?: string }): TaskRecord {
+  private update(taskId: string, patch: { executionState?: ExecutionState; deliveryState?: DeliveryState; reviewState?: ReviewState; remoteJobId?: string; blockReason?: string; lastEventAt?: string; worktreePath?: string; headSha?: string; prUrl?: string; baseSha?: string; branch?: string; reviewedSha?: string; reviewNote?: string }): TaskRecord {
     const existing = this.get(taskId);
     if (!existing) throw new Error(`Unknown task id ${taskId}.`);
     const now = new Date().toISOString();
-    this.db.prepare(`UPDATE tasks SET execution_state = ?, delivery_state = ?, remote_job_id = ?, block_reason = ?, last_event_at = ?, worktree_path = ?, head_sha = ?, pr_url = ?, base_sha = ?, branch = ?, updated_at = ? WHERE task_id = ?`)
-      .run(patch.executionState ?? existing.executionState, patch.deliveryState ?? existing.deliveryState,
+    this.db.prepare(`UPDATE tasks SET execution_state = ?, delivery_state = ?, review_state = ?, remote_job_id = ?, block_reason = ?, last_event_at = ?, worktree_path = ?, head_sha = ?, pr_url = ?, base_sha = ?, branch = ?, reviewed_sha = ?, review_note = ?, updated_at = ? WHERE task_id = ?`)
+      .run(patch.executionState ?? existing.executionState, patch.deliveryState ?? existing.deliveryState, patch.reviewState ?? existing.reviewState,
         patch.remoteJobId ?? existing.remoteJobId ?? null, patch.blockReason ?? null,
         patch.lastEventAt ?? existing.lastEventAt ?? null, patch.worktreePath ?? existing.worktreePath ?? null,
         patch.headSha ?? existing.headSha ?? null, patch.prUrl ?? existing.prUrl ?? null,
-        patch.baseSha ?? existing.baseSha ?? null, patch.branch ?? existing.branch ?? null, now, taskId);
+        patch.baseSha ?? existing.baseSha ?? null, patch.branch ?? existing.branch ?? null,
+        patch.reviewedSha ?? existing.reviewedSha ?? null, patch.reviewNote ?? existing.reviewNote ?? null, now, taskId);
     const updated = this.get(taskId)!;
-    if (updated.executionState !== existing.executionState || updated.deliveryState !== existing.deliveryState || updated.blockReason !== existing.blockReason) {
-      this.emit(taskId, "task.state_changed", `${existing.executionState}/${existing.deliveryState} → ${updated.executionState}/${updated.deliveryState}${updated.blockReason ? `: ${updated.blockReason.slice(0, 500)}` : ""}`);
+    if (updated.executionState !== existing.executionState || updated.deliveryState !== existing.deliveryState || updated.reviewState !== existing.reviewState || updated.blockReason !== existing.blockReason) {
+      this.emit(taskId, "task.state_changed", `${existing.executionState}/${existing.deliveryState}/${existing.reviewState} → ${updated.executionState}/${updated.deliveryState}/${updated.reviewState}${updated.blockReason ? `: ${updated.blockReason.slice(0, 500)}` : ""}`);
     }
     return updated;
   }
@@ -237,6 +255,8 @@ function taskFromRow(row: TaskRow): TaskRecord {
     ...(row.pr_url ? { prUrl: row.pr_url } : {}),
     ...(row.base_sha ? { baseSha: row.base_sha } : {}),
     ...(row.branch ? { branch: row.branch } : {}),
+    ...(row.reviewed_sha ? { reviewedSha: row.reviewed_sha } : {}),
+    ...(row.review_note ? { reviewNote: row.review_note } : {}),
     createdAt: row.created_at, updatedAt: row.updated_at, executionState: row.execution_state,
     deliveryState: row.delivery_state, reviewState: row.review_state,
   };

@@ -5,6 +5,7 @@ import { TokenStore } from "./token-store.js";
 import { WorkBuddyClient } from "./workbuddy-client.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { TaskStore } from "./task-store.js";
+import { Coordinator } from "./coordinator.js";
 
 const config = loadConfig();
 const store = new TokenStore(config.tokenFile);
@@ -40,6 +41,18 @@ async function main(): Promise<void> {
     case "tasks":
       console.log(JSON.stringify({ tasks: tasks.list({ limit: 20 }) }, null, 2));
       return;
+    case "coordinator": {
+      const coordinator = new Coordinator(config, tasks);
+      if (args.includes("--once")) {
+        console.log(JSON.stringify(await coordinator.refreshOnce(), null, 2));
+        return;
+      }
+      const abort = new AbortController();
+      process.once("SIGINT", () => abort.abort());
+      process.once("SIGTERM", () => abort.abort());
+      await coordinator.run(config.coordinatorPollMs, abort.signal);
+      return;
+    }
     default:
       console.log(`workbuddy-bridge commands:
   auth [--no-open]   Authorize through a loopback OAuth callback
@@ -47,7 +60,8 @@ async function main(): Promise<void> {
   send <message>     Send a plain-text instruction
   history            Read the 20 most recent messages
   projects           List registered ClawBridge projects
-  tasks              List the 20 most recent durable ClawBridge tasks`);
+  tasks              List the 20 most recent durable ClawBridge tasks
+  coordinator [--once]  Refresh remote task states and write local events`);
   }
 }
 

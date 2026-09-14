@@ -17,6 +17,7 @@ const config: BridgeConfig = {
   stateDir: "/tmp/clawbridge-codebuddy-client-test",
   projectsFile: "/tmp/clawbridge-codebuddy-client-test/projects.json",
   taskDatabaseFile: "/tmp/clawbridge-codebuddy-client-test/tasks.sqlite",
+  coordinatorPollMs: 15_000,
 };
 
 test("CodeBuddy client dispatches a model-pinned isolated job", async () => {

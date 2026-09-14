@@ -23,6 +23,7 @@ test("client sends a local-assistant message with bearer auth", async () => {
     stateDir: directory,
     projectsFile: path.join(directory, "projects.json"),
     taskDatabaseFile: path.join(directory, "tasks.sqlite"),
+    coordinatorPollMs: 15_000,
   };
   const store = new TokenStore(config.tokenFile);
   await store.saveToken({

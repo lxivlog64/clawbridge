@@ -15,6 +15,7 @@ export interface BridgeConfig {
   stateDir: string;
   projectsFile: string;
   taskDatabaseFile: string;
+  coordinatorPollMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -52,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     stateDir,
     projectsFile: path.resolve(env.CLAWBRIDGE_PROJECTS_FILE ?? path.join(stateDir, "projects.json")),
     taskDatabaseFile: path.resolve(env.CLAWBRIDGE_TASK_DATABASE ?? path.join(stateDir, "tasks.sqlite")),
+    coordinatorPollMs: positiveInteger(env.CLAWBRIDGE_COORDINATOR_POLL_MS, 15_000, "CLAWBRIDGE_COORDINATOR_POLL_MS"),
   };
 }
 

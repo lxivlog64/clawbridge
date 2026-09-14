@@ -87,6 +87,12 @@ npm test
 
 测试不会创建开发任务、读取项目源码或输出 Gateway 密码。它只建立临时回环隧道并调用 health；使用独立本地端口和实例标识，结束时关闭 MCP 连接。
 
+### 后台协调与审查（M4/M5）
+
+执行 `npm run cli -- coordinator` 可在独立进程中轮询已派发的任务，并把状态变化写入 SQLite 事件 outbox；`Ctrl+C` 或 `SIGTERM` 会停止该进程。`npm run cli -- coordinator --once` 只刷新一次，适合 systemd/launchd 定时调用。轮询间隔可用 `CLAWBRIDGE_COORDINATOR_POLL_MS` 配置，默认 15 秒。
+
+完成草稿 PR 后，用 `clawbridge_review_context` 获取固定 SHA 的变更概览；人工审查后用 `clawbridge_record_review` 记录 `reviewed` 或 `changes_requested`。在合并前调用 `clawbridge_check_review_head`；若 worktree HEAD 已变化，记录的审查会变为 `pending`，必须重新审查。
+
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
 
 ## 配置多个 ClawBridge

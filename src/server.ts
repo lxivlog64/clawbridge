@@ -8,6 +8,7 @@ import { buildDevelopmentPrompt } from "./handoff.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { RemoteWorker } from "./remote-worker.js";
 import { prepareWorktree } from "./worktree-preparer.js";
+import { mapRemoteState } from "./lifecycle.js";
 import { TaskStore, type ExecutionState } from "./task-store.js";
 import { TokenStore } from "./token-store.js";
 import { WorkBuddyClient } from "./workbuddy-client.js";
@@ -264,6 +265,32 @@ server.tool(
 );
 
 server.tool(
+  "clawbridge_record_review",
+  "Record a human/Codex review conclusion for the exact verified task SHA. It never merges a PR or substitutes for a GitHub approval.",
+  { taskId: z.string().uuid(), outcome: z.enum(["reviewed", "changes_requested"]), note: z.string().min(1).max(8_000) },
+  async ({ taskId, outcome, note }) => {
+    const task = tasks.get(taskId);
+    if (!task?.headSha || task.deliveryState !== "ready") throw new Error("A verified delivered SHA is required before recording review.");
+    return json({ task: tasks.markReview(taskId, outcome, task.headSha, note) });
+  },
+);
+
+server.tool(
+  "clawbridge_check_review_head",
+  "Check whether the reviewed task worktree still points at the reviewed SHA. A changed HEAD invalidates the recorded review and returns it to pending.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = tasks.get(taskId);
+    if (!task?.worktreePath || !task.reviewedSha) throw new Error("No recorded review SHA exists for this task.");
+    const worker = projects.workerFor(task.projectId);
+    const head = await remoteWorker.git(worker, task.worktreePath, ["rev-parse", "HEAD"]);
+    if (head.exitCode !== 0) throw new Error("Could not read the review worktree HEAD.");
+    if (head.stdout.trim() === task.reviewedSha) return json({ task, valid: true });
+    return json({ task: tasks.markReview(taskId, "pending", undefined, "Task HEAD changed after review."), valid: false });
+  },
+);
+
+server.tool(
   "clawbridge_tasks",
   "List compact durable task records. Status is a recorded lifecycle state, not an estimated progress percentage.",
   {
@@ -447,16 +474,6 @@ await server.connect(transport);
 
 function permissionMode(profile: string | undefined): "default" | "acceptEdits" {
   return profile === "acceptEdits" ? "acceptEdits" : "default";
-}
-
-function mapRemoteState(state: unknown, status: unknown, alive: unknown, settled: unknown): ExecutionState {
-  const values = [state, status].filter((value): value is string => typeof value === "string").map((value) => value.toLowerCase());
-  if (values.includes("done") || values.includes("succeeded") || (settled === true && state !== "failed")) return "succeeded";
-  if (values.includes("failed")) return "failed";
-  if (values.includes("stopped") || (alive === false && settled === true)) return "cancelled";
-  if (values.includes("blocked")) return "waiting_input";
-  if (values.includes("waiting")) return "waiting_input";
-  return "running";
 }
 
 function requireRemoteTask(taskId: string) {

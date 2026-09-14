@@ -35,6 +35,9 @@ test("task store persists queued work and deduplicates identical requests", asyn
   const verified = secondStore.markVerified(first.task.taskId, "/srv/projects/sample/.worktrees/task", "a".repeat(40));
   assert.equal(verified.headSha, "a".repeat(40));
   assert.equal(secondStore.markDelivery(first.task.taskId, "ready", { prUrl: "https://example.test/pr/1" }).prUrl, "https://example.test/pr/1");
+  const reviewed = secondStore.markReview(first.task.taskId, "reviewed", "a".repeat(40), "Looks good");
+  assert.equal(reviewed.reviewedSha, "a".repeat(40));
+  assert.equal(reviewed.reviewState, "reviewed");
   const event = secondStore.listEvents(10, true)[0];
   assert.ok(event);
   assert.equal(secondStore.acknowledgeEvent(event!.eventId), true);
