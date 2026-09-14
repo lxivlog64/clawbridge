@@ -50,7 +50,7 @@ server.tool(
 
 server.tool(
   "clawbridge_submit",
-  "Record an idempotent development task for a registered project. M1 stores it as queued only; remote dispatch starts in M2 and this tool never claims that a worker has started.",
+  "Record an idempotent development task for a registered project. Submit stores it as queued; call clawbridge_dispatch to start its worker.",
   {
     projectId: z.string().min(1).max(80),
     spec: z.string().min(1).max(200_000),
@@ -67,7 +67,85 @@ server.tool(
       idempotencyKey,
       requestedModel: model ?? project.defaultModel,
     });
-    return json({ ...result, dispatch: "not_started", message: "Task has been durably queued. Remote dispatch is not implemented until M2." });
+    return json({ ...result, dispatch: "not_started" });
+  },
+);
+
+server.tool(
+  "clawbridge_dispatch",
+  "Dispatch one queued task to CodeBuddy using its registered remote repository path. The worker receives an isolated worktree request. An uncertain gateway receipt becomes unknown and is never automatically retried.",
+  { taskId: z.string().uuid(), effort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional() },
+  async ({ taskId, effort }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    if (task.executionState !== "queued") throw new Error(`Task ${taskId} is ${task.executionState}, not queued.`);
+    const project = projects.require(task.projectId);
+    const preflight = projects.preflight(task.projectId);
+    if (!preflight.ready) throw new Error(`Cannot dispatch task: ${preflight.blockers.join(" ")}`);
+    if (tasks.activeCount(task.projectId) >= project.maxConcurrentJobs) {
+      throw new Error(`Project ${project.id} has reached maxConcurrentJobs=${project.maxConcurrentJobs}.`);
+    }
+    const spec = tasks.getSpec(taskId);
+    if (!spec) throw new Error("Task specification is unavailable; do not dispatch this task.");
+    tasks.markExecution(taskId, "dispatching");
+    try {
+      const job = await codeBuddy.dispatchJob({
+        cwd: project.remoteRepositoryPath,
+        prompt: `ClawBridge task ${taskId}\n\n${spec}\n\nWork only in the isolated worktree. Do not merge, deploy, release, or access credentials. Commit the completed work and report exact test commands and commit SHA.`,
+        model: task.requestedModel,
+        effort,
+        permissionMode: permissionMode(project.permissionProfile),
+        name: `clawbridge-${taskId}`,
+        bgIsolation: "worktree",
+      });
+      if (!job.id) throw new Error("CodeBuddy gateway returned no job id.");
+      return json({ task: tasks.markDispatched(taskId, job.id), remote: { id: job.id, state: job.state } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown dispatch error";
+      return json({ task: tasks.markExecution(taskId, "unknown", message), warning: "Dispatch outcome is uncertain. Inspect the gateway before retrying." });
+    }
+  },
+);
+
+server.tool(
+  "clawbridge_refresh",
+  "Refresh a dispatched task from its CodeBuddy job. This maps observed job state to a recorded lifecycle without estimating progress.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    if (!task.remoteJobId) return json({ task, refreshed: false, reason: "No remote job has been recorded." });
+    try {
+      const remote = await codeBuddy.getJob(task.remoteJobId);
+      const mapped = mapRemoteState(remote.state, remote.status, remote.alive, remote.settled);
+      return json({ task: tasks.markExecution(taskId, mapped), remote, refreshed: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown gateway error";
+      return json({ task: tasks.markExecution(taskId, "unknown", message), refreshed: false });
+    }
+  },
+);
+
+server.tool(
+  "clawbridge_reply",
+  "Reply to a task waiting for ordinary input. Never use this tool to approve permissions, destructive operations, releases, deployments, or credential access.",
+  { taskId: z.string().uuid(), text: z.string().min(1).max(20_000) },
+  async ({ taskId, text }) => {
+    const task = requireRemoteTask(taskId);
+    if (task.executionState === "waiting_permission") throw new Error("Permission approval must be explicitly handled by the user outside this tool.");
+    await codeBuddy.reply(task.remoteJobId!, text);
+    return json({ task: tasks.markExecution(taskId, "running") });
+  },
+);
+
+server.tool(
+  "clawbridge_cancel",
+  "Request cancellation of a remote task. A successful request is not treated as confirmation until clawbridge_refresh observes a terminal state.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = requireRemoteTask(taskId);
+    await codeBuddy.stop(task.remoteJobId!);
+    return json({ task: tasks.markExecution(taskId, "cancel_requested") });
   },
 );
 
@@ -238,3 +316,24 @@ server.tool(
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+function permissionMode(profile: string | undefined): "default" | "acceptEdits" {
+  return profile === "acceptEdits" ? "acceptEdits" : "default";
+}
+
+function mapRemoteState(state: unknown, status: unknown, alive: unknown, settled: unknown): ExecutionState {
+  const values = [state, status].filter((value): value is string => typeof value === "string").map((value) => value.toLowerCase());
+  if (values.includes("done") || values.includes("succeeded") || (settled === true && state !== "failed")) return "succeeded";
+  if (values.includes("failed")) return "failed";
+  if (values.includes("stopped") || (alive === false && settled === true)) return "cancelled";
+  if (values.includes("blocked")) return "waiting_input";
+  if (values.includes("waiting")) return "waiting_input";
+  return "running";
+}
+
+function requireRemoteTask(taskId: string) {
+  const task = tasks.get(taskId);
+  if (!task) throw new Error(`Unknown task id ${taskId}.`);
+  if (!task.remoteJobId) throw new Error(`Task ${taskId} has no remote job.`);
+  return task;
+}

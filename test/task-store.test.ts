@@ -23,6 +23,11 @@ test("task store persists queued work and deduplicates identical requests", asyn
   const secondStore = new TaskStore(databaseFile);
   assert.deepEqual(secondStore.get(first.task.taskId), first.task);
   assert.equal(secondStore.getSpec(first.task.taskId), "Implement the profile page");
+  const dispatched = secondStore.markDispatched(first.task.taskId, "remote-job-1");
+  assert.equal(dispatched.executionState, "running");
+  assert.equal(dispatched.remoteJobId, "remote-job-1");
+  assert.equal(secondStore.activeCount("sample-app"), 1);
+  assert.equal(secondStore.markExecution(first.task.taskId, "cancel_requested").executionState, "cancel_requested");
   assert.equal(secondStore.list({ limit: 10 }).length, 1);
   assert.throws(() => secondStore.createOrGet({
     projectId: "sample-app", spec: "A different request", idempotencyKey: "request-0001",
