@@ -62,7 +62,11 @@
 }
 ```
 
-`credentialRef` 和 `githubCredentialRef` 只是名称，不能填令牌。M1 已提供 `clawbridge_projects`、`clawbridge_preflight`、`clawbridge_submit`、`clawbridge_tasks`、`clawbridge_status`。其中 `clawbridge_submit` 只会持久化为 `queued`，尚不会远端派发；M2 才会接入安全 worktree 派发。
+`credentialRef` 和 `githubCredentialRef` 只是名称，不能填令牌。M1/M2 已提供 `clawbridge_projects`、`clawbridge_preflight`、`clawbridge_submit`、`clawbridge_dispatch`、`clawbridge_refresh`、`clawbridge_reply`、`clawbridge_cancel`、`clawbridge_tasks`、`clawbridge_status`。
+
+先用 `clawbridge_submit` 创建带唯一 `idempotencyKey` 的 `queued` 任务，再用 `clawbridge_dispatch` 显式派发。完成后使用 `clawbridge_refresh` 查询实际远端状态。网关调用超时或中断时任务会标为 `unknown`；先在 Gateway 查找同名 `clawbridge-<taskId>` 任务，不能直接重试。
+
+当前 M2 依赖 CodeBuddy Gateway 自己创建隔离 worktree。独立远端准备器、真实 worktree 路径与 Git HEAD 核验，以及 GitHub 草稿 PR 交付仍在后续里程碑；在这些完成前，`succeeded` 只代表远端执行结束，不代表代码已交付或已审查。
 
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
 
