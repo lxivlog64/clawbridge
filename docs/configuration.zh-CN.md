@@ -74,6 +74,19 @@ M3 已提供 `clawbridge_verify_delivery` 和 `clawbridge_create_draft_pr`。在
 
 草稿 PR 使用执行节点上的 `gh` CLI 已有登录态。请为执行节点配置仅限目标仓库写入权限的 GitHub 身份，并在创建前确认任务分支已经推送。ClawBridge 不会自动推送、强推、合并或部署。未配置 `gh`、分支未推送或 SHA 不一致都会使交付状态变为 `failed`，而非伪造 PR 地址。
 
+### 真实连接回归（M0）
+
+默认 `npm test` 不会连接远端。完成 SSH、Gateway 后，可显式运行以下命令验证本机启动器、SSH 隧道、Linux Gateway 与 MCP health：
+
+```bash
+CLAWBRIDGE_INTEGRATION=1 \
+CLAWBRIDGE_SSH_HOST=codebuddy-worker \
+CLAWBRIDGE_REMOTE_CODEBUDDY=/absolute/path/to/codebuddy \
+npm test
+```
+
+测试不会创建开发任务、读取项目源码或输出 Gateway 密码。它只建立临时回环隧道并调用 health；使用独立本地端口和实例标识，结束时关闭 MCP 连接。
+
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
 
 ## 配置多个 ClawBridge

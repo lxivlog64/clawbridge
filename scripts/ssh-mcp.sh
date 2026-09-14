@@ -63,4 +63,11 @@ export CODEBUDDY_GATEWAY_TOKEN="$codebuddy_gateway_token"
 
 rmdir "$lock_dir" 2>/dev/null || true
 trap - EXIT HUP INT TERM
-exec node "$bridge_dir/dist/src/server.js"
+node "$bridge_dir/dist/src/server.js"
+node_status=$?
+
+# The forwarding master is only needed while this STDIO MCP process is alive.
+# Explicit cleanup prevents a completed client from holding its local port for
+# the ControlPersist interval and blocking the next startup.
+ssh -n -p "$ssh_port" -S "$control_socket" -O exit "$ssh_host" >/dev/null 2>&1 || true
+exit "$node_status"

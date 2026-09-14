@@ -257,7 +257,7 @@ GitHub 身份可采用专用机器账号或 GitHub App；不要给执行节点�
 
 ### 当前实施进度
 
-- M0：已实现 CodeBuddy `GET /jobs/:id` 的 `data.job` 兼容解析、请求超时、响应大小限制、transcript 大小限制和思考事件过滤；SSH 启动器已改用 `id -u` 并增加启动锁、BatchMode、连接超时与保活选项。模拟回归测试已覆盖，尚未完成真实 Gateway 夹具和双端启动回归。
+- M0：已实现 CodeBuddy `GET /jobs/:id` 的 `data.job` 兼容解析、请求超时、响应大小限制、transcript 大小限制和思考事件过滤；SSH 启动器已改用 `id -u` 并增加启动锁、BatchMode、连接超时与保活选项。真实双端启动与 Gateway health 回归测试已加入，需显式设置 `CLAWBRIDGE_INTEGRATION=1` 执行。
 - M1：实施中。项目注册、静态预检、SQLite 任务台账、幂等创建和任务查询正在实现；不含远端派发。
 - M2：实施中。项目受限的 CodeBuddy 派发、状态刷新、普通追问和取消正在实现。远端准备器、Git worktree 的独立核验与断线回执关联仍未完成，不能声称达到 M2 完成标准。
 - M3：实施中。远端受限 Git 核验及 GitHub CLI 草稿 PR 创建正在实现。尚未完成真实测试仓库的端到端验证。
