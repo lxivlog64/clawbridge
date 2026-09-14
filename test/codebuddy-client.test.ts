@@ -36,6 +36,7 @@ test("CodeBuddy client dispatches a model-pinned isolated job", async () => {
     model: "example-code-model",
     effort: "medium",
     permissionMode: "default",
+    allowedTools: ["Bash(npm test:*)"],
     bgIsolation: "worktree",
   });
 
@@ -50,6 +51,7 @@ test("CodeBuddy client dispatches a model-pinned isolated job", async () => {
     model: "example-code-model",
     effort: "medium",
     permissionMode: "default",
+    allowedTools: ["Bash(npm test:*)"],
     bgIsolation: "worktree",
   });
 });

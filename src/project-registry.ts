@@ -15,6 +15,7 @@ const projectSchema = z.object({
   buildCommands: z.array(z.array(z.string().min(1))).default([]),
   defaultModel: z.string().min(1).max(200).optional(),
   permissionProfile: z.string().min(1).max(80).optional(),
+  allowedTools: z.array(z.string().min(1).max(300)).max(40).default([]),
   maxRuntimeMinutes: z.number().int().positive().max(24 * 60).default(120),
   maxRepairRounds: z.number().int().min(0).max(10).default(1),
   maxConcurrentJobs: z.number().int().positive().max(32).default(1),

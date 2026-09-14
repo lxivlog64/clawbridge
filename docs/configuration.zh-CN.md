@@ -177,6 +177,7 @@ git clone git@github.com:owner/project.git
 - `model`：使用登录后 `codebuddy --help` 列出的具体模型 ID，避免依赖动态别名。
 - `effort`：简单修改用 `low`/`medium`，复杂设计和排错用 `high`/`xhigh`。
 - `permissionMode`：推荐 `default`、`acceptEdits` 或 `auto`。其中 `acceptEdits` 不会自动执行 Bash；需要无人值守开发时，优先在隔离工作区使用 `auto`，并保留危险操作的拦截。不要使用跳过全部权限检查的模式。
+- `allowedTools`：可选的会话级最小白名单，例如 `["Bash(npm test:*)", "Bash(git status:*)"]`。只为已登记项目的必要命令添加规则；不要使用泛化的 `Bash` 规则。
 - `useWorktree`：Git 仓库中保持为 `true`；仅做非 Git 连通测试时才关闭。
 - `cwd`：只指向专用开发目录，不指向用户主目录或系统目录。
 

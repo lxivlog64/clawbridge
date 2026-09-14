@@ -10,6 +10,8 @@ export interface CodeBuddyJobRequest {
   model?: string;
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   permissionMode?: "default" | "acceptEdits" | "plan" | "auto" | "dontAsk";
+  /** Explicit, narrowly scoped tool rules approved for this project. */
+  allowedTools?: string[];
   agent?: "cli" | "ptc" | "minimal" | "create" | string;
   name?: string;
   bgIsolation?: "none" | "worktree";

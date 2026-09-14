@@ -11,6 +11,7 @@ const worker: RegisteredWorker = {
 const project: RegisteredProject = {
   id: "app", repository: "owner/app", deliveryRemote: "origin", defaultBranch: "main", workerId: "linux",
   remoteRepositoryPath: "/srv/projects/app", requiredCapabilities: [], testCommands: [], buildCommands: [],
+  allowedTools: [],
   maxRuntimeMinutes: 120, maxRepairRounds: 1, maxConcurrentJobs: 1,
 };
 const success = (stdout = ""): RemoteCommandResult => ({ exitCode: 0, stdout, stderr: "" });

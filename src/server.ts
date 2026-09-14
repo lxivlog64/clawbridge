@@ -104,6 +104,7 @@ server.tool(
         model: task.requestedModel,
         effort,
         permissionMode: permissionMode(project.permissionProfile),
+        allowedTools: project.allowedTools,
         name: `clawbridge-${taskId}`,
         bgIsolation: "none",
       });
