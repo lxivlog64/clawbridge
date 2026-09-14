@@ -16,6 +16,9 @@ export interface TaskRecord {
   remoteJobId?: string;
   blockReason?: string;
   lastEventAt?: string;
+  worktreePath?: string;
+  headSha?: string;
+  prUrl?: string;
   createdAt: string;
   updatedAt: string;
   executionState: ExecutionState;
@@ -32,6 +35,9 @@ interface TaskRow {
   remote_job_id: string | null;
   block_reason: string | null;
   last_event_at: string | null;
+  worktree_path: string | null;
+  head_sha: string | null;
+  pr_url: string | null;
   created_at: string;
   updated_at: string;
   execution_state: ExecutionState;
@@ -60,6 +66,9 @@ export class TaskStore {
         remote_job_id TEXT UNIQUE,
         block_reason TEXT,
         last_event_at TEXT,
+        worktree_path TEXT,
+        head_sha TEXT,
+        pr_url TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         execution_state TEXT NOT NULL,
@@ -72,6 +81,9 @@ export class TaskStore {
     this.ensureColumn("remote_job_id", "TEXT");
     this.ensureColumn("block_reason", "TEXT");
     this.ensureColumn("last_event_at", "TEXT");
+    this.ensureColumn("worktree_path", "TEXT");
+    this.ensureColumn("head_sha", "TEXT");
+    this.ensureColumn("pr_url", "TEXT");
   }
 
   createOrGet(input: { projectId: string; spec: string; idempotencyKey: string; requestedModel?: string }): { task: TaskRecord; reused: boolean } {
@@ -134,6 +146,14 @@ export class TaskStore {
     return this.update(taskId, { executionState, blockReason, lastEventAt: new Date().toISOString() });
   }
 
+  markVerified(taskId: string, worktreePath: string, headSha: string): TaskRecord {
+    return this.update(taskId, { deliveryState: "validating", worktreePath, headSha });
+  }
+
+  markDelivery(taskId: string, deliveryState: DeliveryState, patch: { prUrl?: string; blockReason?: string } = {}): TaskRecord {
+    return this.update(taskId, { deliveryState, prUrl: patch.prUrl, blockReason: patch.blockReason });
+  }
+
   close(): void { this.db.close(); }
 
   private ensureColumn(column: string, definition: string): void {
@@ -141,13 +161,15 @@ export class TaskStore {
     if (!columns.some((item) => item.name === column)) this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
   }
 
-  private update(taskId: string, patch: { executionState?: ExecutionState; remoteJobId?: string; blockReason?: string; lastEventAt?: string }): TaskRecord {
+  private update(taskId: string, patch: { executionState?: ExecutionState; deliveryState?: DeliveryState; remoteJobId?: string; blockReason?: string; lastEventAt?: string; worktreePath?: string; headSha?: string; prUrl?: string }): TaskRecord {
     const existing = this.get(taskId);
     if (!existing) throw new Error(`Unknown task id ${taskId}.`);
     const now = new Date().toISOString();
-    this.db.prepare(`UPDATE tasks SET execution_state = ?, remote_job_id = ?, block_reason = ?, last_event_at = ?, updated_at = ? WHERE task_id = ?`)
-      .run(patch.executionState ?? existing.executionState, patch.remoteJobId ?? existing.remoteJobId ?? null,
-        patch.blockReason ?? null, patch.lastEventAt ?? existing.lastEventAt ?? null, now, taskId);
+    this.db.prepare(`UPDATE tasks SET execution_state = ?, delivery_state = ?, remote_job_id = ?, block_reason = ?, last_event_at = ?, worktree_path = ?, head_sha = ?, pr_url = ?, updated_at = ? WHERE task_id = ?`)
+      .run(patch.executionState ?? existing.executionState, patch.deliveryState ?? existing.deliveryState,
+        patch.remoteJobId ?? existing.remoteJobId ?? null, patch.blockReason ?? null,
+        patch.lastEventAt ?? existing.lastEventAt ?? null, patch.worktreePath ?? existing.worktreePath ?? null,
+        patch.headSha ?? existing.headSha ?? null, patch.prUrl ?? existing.prUrl ?? null, now, taskId);
     return this.get(taskId)!;
   }
 }
@@ -162,6 +184,9 @@ function taskFromRow(row: TaskRow): TaskRecord {
     ...(row.remote_job_id ? { remoteJobId: row.remote_job_id } : {}),
     ...(row.block_reason ? { blockReason: row.block_reason } : {}),
     ...(row.last_event_at ? { lastEventAt: row.last_event_at } : {}),
+    ...(row.worktree_path ? { worktreePath: row.worktree_path } : {}),
+    ...(row.head_sha ? { headSha: row.head_sha } : {}),
+    ...(row.pr_url ? { prUrl: row.pr_url } : {}),
     createdAt: row.created_at, updatedAt: row.updated_at, executionState: row.execution_state,
     deliveryState: row.delivery_state, reviewState: row.review_state,
   };

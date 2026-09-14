@@ -6,6 +6,7 @@ import { CodeBuddyClient } from "./codebuddy-client.js";
 import { loadConfig } from "./config.js";
 import { buildDevelopmentPrompt } from "./handoff.js";
 import { ProjectRegistry } from "./project-registry.js";
+import { RemoteWorker } from "./remote-worker.js";
 import { TaskStore, type ExecutionState } from "./task-store.js";
 import { TokenStore } from "./token-store.js";
 import { WorkBuddyClient } from "./workbuddy-client.js";
@@ -15,6 +16,7 @@ const client = new WorkBuddyClient(config, new TokenStore(config.tokenFile));
 const codeBuddy = new CodeBuddyClient(config);
 const projects = ProjectRegistry.load(config.projectsFile);
 const tasks = new TaskStore(config.taskDatabaseFile);
+const remoteWorker = new RemoteWorker();
 const server = new McpServer({ name: "clawbridge", version: "0.1.0" });
 const gitRef = z
   .string()
@@ -146,6 +148,64 @@ server.tool(
     const task = requireRemoteTask(taskId);
     await codeBuddy.stop(task.remoteJobId!);
     return json({ task: tasks.markExecution(taskId, "cancel_requested") });
+  },
+);
+
+server.tool(
+  "clawbridge_verify_delivery",
+  "Verify a completed task's remote Git worktree before delivery. The worktree must be under the registered worker allowlist and on a non-default branch.",
+  { taskId: z.string().uuid(), worktreePath: z.string().min(1).max(1_024) },
+  async ({ taskId, worktreePath }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    if (task.executionState !== "succeeded") throw new Error("Only a succeeded execution can be verified for delivery.");
+    const project = projects.require(task.projectId);
+    if (!projects.allowsPath(task.projectId, worktreePath)) throw new Error("Worktree path is outside the registered worker allowlist.");
+    const worker = projects.workerFor(task.projectId);
+    const [head, branch] = await Promise.all([
+      remoteWorker.git(worker, worktreePath, ["rev-parse", "HEAD"]),
+      remoteWorker.git(worker, worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    ]);
+    if (head.exitCode !== 0 || branch.exitCode !== 0) {
+      const reason = [head.stderr, branch.stderr].filter(Boolean).join("; ").slice(-2_000);
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: reason || "Git worktree verification failed." }), verified: false });
+    }
+    const headSha = head.stdout.trim();
+    const branchName = branch.stdout.trim();
+    if (!/^[0-9a-f]{40}$/i.test(headSha) || !branchName || branchName === project.defaultBranch || branchName === "HEAD") {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Worktree must have a commit on a non-default branch." }), verified: false });
+    }
+    return json({ task: tasks.markVerified(taskId, worktreePath, headSha), verified: true, branch: branchName });
+  },
+);
+
+server.tool(
+  "clawbridge_create_draft_pr",
+  "Create a GitHub draft PR after delivery verification. This uses the worker's existing GitHub CLI authentication; it never merges or force-pushes.",
+  { taskId: z.string().uuid(), title: z.string().min(1).max(200), body: z.string().min(1).max(30_000) },
+  async ({ taskId, title, body }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    if (task.deliveryState !== "validating" || !task.worktreePath || !task.headSha) throw new Error("Run clawbridge_verify_delivery successfully before creating a PR.");
+    const project = projects.require(task.projectId);
+    const worker = projects.workerFor(task.projectId);
+    const branch = await remoteWorker.git(worker, task.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    const remoteHead = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", "origin", "HEAD"]);
+    if (branch.exitCode !== 0 || remoteHead.exitCode !== 0) {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Could not verify Git branch or origin." }), created: false });
+    }
+    const branchName = branch.stdout.trim();
+    const pushed = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", "origin", `refs/heads/${branchName}`]);
+    if (pushed.exitCode !== 0 || !pushed.stdout.startsWith(task.headSha)) {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Verified commit is not pushed to the task branch." }), created: false });
+    }
+    const created = await remoteWorker.gh(worker, task.worktreePath, ["pr", "create", "--draft", "--base", project.defaultBranch, "--head", branchName, "--title", title, "--body", body]);
+    if (created.exitCode !== 0) {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: created.stderr.slice(-2_000) || "GitHub draft PR creation failed." }), created: false });
+    }
+    const prUrl = created.stdout.trim().split(/\s+/).find((value) => /^https:\/\//.test(value));
+    if (!prUrl) return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "GitHub CLI did not return a PR URL." }), created: false });
+    return json({ task: tasks.markDelivery(taskId, "ready", { prUrl }), created: true });
   },
 );
 

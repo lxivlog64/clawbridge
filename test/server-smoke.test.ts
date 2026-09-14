@@ -21,6 +21,7 @@ test("MCP server starts and publishes the expected tools", async () => {
     const names = result.tools.map((tool) => tool.name).sort();
     assert.deepEqual(names, [
       "clawbridge_cancel",
+      "clawbridge_create_draft_pr",
       "clawbridge_dispatch",
       "clawbridge_preflight",
       "clawbridge_projects",
@@ -29,6 +30,7 @@ test("MCP server starts and publishes the expected tools", async () => {
       "clawbridge_status",
       "clawbridge_submit",
       "clawbridge_tasks",
+      "clawbridge_verify_delivery",
       "codebuddy_health",
       "codebuddy_job_status",
       "codebuddy_job_transcript",

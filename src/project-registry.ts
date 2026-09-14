@@ -89,6 +89,18 @@ export class ProjectRegistry {
     return this.projects.get(projectId);
   }
 
+  workerFor(projectId: string): RegisteredWorker {
+    const project = this.require(projectId);
+    const worker = this.workers.get(project.workerId);
+    if (!worker) throw new Error(`Project worker ${project.workerId} is not registered.`);
+    return worker;
+  }
+
+  allowsPath(projectId: string, candidate: string): boolean {
+    const worker = this.workerFor(projectId);
+    return worker.allowedRoots.some((root) => isWithinRoot(candidate, root));
+  }
+
   require(projectId: string): RegisteredProject {
     const project = this.get(projectId);
     if (!project) throw new Error(`Unknown project id ${projectId}. Register it in ${this.sourceFile}.`);

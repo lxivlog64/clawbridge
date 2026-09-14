@@ -68,6 +68,12 @@
 
 当前 M2 依赖 CodeBuddy Gateway 自己创建隔离 worktree。独立远端准备器、真实 worktree 路径与 Git HEAD 核验，以及 GitHub 草稿 PR 交付仍在后续里程碑；在这些完成前，`succeeded` 只代表远端执行结束，不代表代码已交付或已审查。
 
+### GitHub 草稿 PR（M3）
+
+M3 已提供 `clawbridge_verify_delivery` 和 `clawbridge_create_draft_pr`。在任务刷新为 `succeeded` 后，必须先提供 CodeBuddy worktree 的实际路径进行核验；该路径必须处于项目登记的 `allowedRoots` 内，且分支不能是默认分支。核验会读取 Git HEAD 和分支名。
+
+草稿 PR 使用执行节点上的 `gh` CLI 已有登录态。请为执行节点配置仅限目标仓库写入权限的 GitHub 身份，并在创建前确认任务分支已经推送。ClawBridge 不会自动推送、强推、合并或部署。未配置 `gh`、分支未推送或 SHA 不一致都会使交付状态变为 `failed`，而非伪造 PR 地址。
+
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
 
 ## 配置多个 ClawBridge
