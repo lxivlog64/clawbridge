@@ -5,12 +5,16 @@ import { z } from "zod";
 import { CodeBuddyClient } from "./codebuddy-client.js";
 import { loadConfig } from "./config.js";
 import { buildDevelopmentPrompt } from "./handoff.js";
+import { ProjectRegistry } from "./project-registry.js";
+import { TaskStore, type ExecutionState } from "./task-store.js";
 import { TokenStore } from "./token-store.js";
 import { WorkBuddyClient } from "./workbuddy-client.js";
 
 const config = loadConfig();
 const client = new WorkBuddyClient(config, new TokenStore(config.tokenFile));
 const codeBuddy = new CodeBuddyClient(config);
+const projects = ProjectRegistry.load(config.projectsFile);
+const tasks = new TaskStore(config.taskDatabaseFile);
 const server = new McpServer({ name: "clawbridge", version: "0.1.0" });
 const gitRef = z
   .string()
@@ -24,6 +28,71 @@ const repositoryPath = z
 function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
 }
+
+const executionState = z.enum([
+  "queued", "preparing", "dispatching", "running", "waiting_input", "waiting_permission",
+  "stalled", "succeeded", "failed", "cancel_requested", "cancelled", "unknown",
+]);
+
+server.tool(
+  "clawbridge_projects",
+  "List registered ClawBridge projects. Credential references, filesystem allowlists, and secrets are never returned.",
+  {},
+  async () => json({ projects: projects.list() }),
+);
+
+server.tool(
+  "clawbridge_preflight",
+  "Validate a registered project’s static configuration before task submission. This M1 check does not start a worker or make network changes.",
+  { projectId: z.string().min(1).max(80) },
+  async ({ projectId }) => json({ projectId, ...projects.preflight(projectId) }),
+);
+
+server.tool(
+  "clawbridge_submit",
+  "Record an idempotent development task for a registered project. M1 stores it as queued only; remote dispatch starts in M2 and this tool never claims that a worker has started.",
+  {
+    projectId: z.string().min(1).max(80),
+    spec: z.string().min(1).max(200_000),
+    idempotencyKey: z.string().min(8).max(200).regex(/^[A-Za-z0-9._:-]+$/),
+    model: z.string().min(1).max(200).optional(),
+  },
+  async ({ projectId, spec, idempotencyKey, model }) => {
+    const preflight = projects.preflight(projectId);
+    if (!preflight.ready) throw new Error(`Cannot submit task: ${preflight.blockers.join(" ")}`);
+    const project = projects.require(projectId);
+    const result = tasks.createOrGet({
+      projectId,
+      spec,
+      idempotencyKey,
+      requestedModel: model ?? project.defaultModel,
+    });
+    return json({ ...result, dispatch: "not_started", message: "Task has been durably queued. Remote dispatch is not implemented until M2." });
+  },
+);
+
+server.tool(
+  "clawbridge_tasks",
+  "List compact durable task records. Status is a recorded lifecycle state, not an estimated progress percentage.",
+  {
+    projectId: z.string().min(1).max(80).optional(),
+    executionState: executionState.optional(),
+    limit: z.number().int().min(1).max(100).default(20),
+  },
+  async ({ projectId, executionState, limit }) =>
+    json({ tasks: tasks.list({ projectId, executionState: executionState as ExecutionState | undefined, limit }) }),
+);
+
+server.tool(
+  "clawbridge_status",
+  "Read one durable task record. Execution, delivery, and review states are deliberately separate.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    return json({ task });
+  },
+);
 
 server.tool(
   "codebuddy_health",

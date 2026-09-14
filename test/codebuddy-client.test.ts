@@ -14,6 +14,9 @@ const config: BridgeConfig = {
   codeBuddyRequestTimeoutMs: 1_000,
   codeBuddyMaxResponseBytes: 10_000,
   codeBuddyTranscriptMaxBytes: 100,
+  stateDir: "/tmp/clawbridge-codebuddy-client-test",
+  projectsFile: "/tmp/clawbridge-codebuddy-client-test/projects.json",
+  taskDatabaseFile: "/tmp/clawbridge-codebuddy-client-test/tasks.sqlite",
 };
 
 test("CodeBuddy client dispatches a model-pinned isolated job", async () => {

@@ -11,6 +11,7 @@ test("MCP server starts and publishes the expected tools", async () => {
     env: {
       PATH: process.env.PATH ?? "",
       WORKBUDDY_TOKEN_FILE: path.resolve(".workbuddy-bridge/test-unused.json"),
+      CLAWBRIDGE_STATE_DIR: path.join("/tmp", `clawbridge-server-smoke-${process.pid}`),
     },
   });
   const client = new Client({ name: "workbuddy-bridge-test", version: "0.1.0" });
@@ -19,6 +20,11 @@ test("MCP server starts and publishes the expected tools", async () => {
     const result = await client.listTools();
     const names = result.tools.map((tool) => tool.name).sort();
     assert.deepEqual(names, [
+      "clawbridge_preflight",
+      "clawbridge_projects",
+      "clawbridge_status",
+      "clawbridge_submit",
+      "clawbridge_tasks",
       "codebuddy_health",
       "codebuddy_job_status",
       "codebuddy_job_transcript",

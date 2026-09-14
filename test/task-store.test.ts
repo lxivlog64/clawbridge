@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { TaskStore } from "../src/task-store.js";
+
+test("task store persists queued work and deduplicates identical requests", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-task-store-"));
+  const databaseFile = path.join(directory, "tasks.sqlite");
+  const firstStore = new TaskStore(databaseFile);
+  const first = firstStore.createOrGet({
+    projectId: "sample-app", spec: "Implement the profile page", idempotencyKey: "request-0001",
+  });
+  const repeated = firstStore.createOrGet({
+    projectId: "sample-app", spec: "Implement the profile page", idempotencyKey: "request-0001",
+  });
+  assert.equal(first.reused, false);
+  assert.equal(repeated.reused, true);
+  assert.equal(repeated.task.taskId, first.task.taskId);
+  firstStore.close();
+
+  const secondStore = new TaskStore(databaseFile);
+  assert.deepEqual(secondStore.get(first.task.taskId), first.task);
+  assert.equal(secondStore.getSpec(first.task.taskId), "Implement the profile page");
+  assert.equal(secondStore.list({ limit: 10 }).length, 1);
+  assert.throws(() => secondStore.createOrGet({
+    projectId: "sample-app", spec: "A different request", idempotencyKey: "request-0001",
+  }), /different task input/);
+  secondStore.close();
+  await fs.rm(directory, { recursive: true, force: true });
+});

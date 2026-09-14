@@ -20,6 +20,9 @@ test("client sends a local-assistant message with bearer auth", async () => {
     codeBuddyRequestTimeoutMs: 1_000,
     codeBuddyMaxResponseBytes: 10_000,
     codeBuddyTranscriptMaxBytes: 16_384,
+    stateDir: directory,
+    projectsFile: path.join(directory, "projects.json"),
+    taskDatabaseFile: path.join(directory, "tasks.sqlite"),
   };
   const store = new TokenStore(config.tokenFile);
   await store.saveToken({

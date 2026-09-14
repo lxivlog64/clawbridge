@@ -1,4 +1,5 @@
 import path from "node:path";
+import os from "node:os";
 
 export interface BridgeConfig {
   clientId: string;
@@ -11,9 +12,13 @@ export interface BridgeConfig {
   codeBuddyRequestTimeoutMs: number;
   codeBuddyMaxResponseBytes: number;
   codeBuddyTranscriptMaxBytes: number;
+  stateDir: string;
+  projectsFile: string;
+  taskDatabaseFile: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
+  const stateDir = path.resolve(env.CLAWBRIDGE_STATE_DIR ?? path.join(os.homedir(), ".clawbridge"));
   return {
     clientId: env.WORKBUDDY_CLIENT_ID ?? "",
     clientSecret: env.WORKBUDDY_CLIENT_SECRET ?? "",
@@ -44,6 +49,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
       16_384,
       "CODEBUDDY_TRANSCRIPT_MAX_BYTES",
     ),
+    stateDir,
+    projectsFile: path.resolve(env.CLAWBRIDGE_PROJECTS_FILE ?? path.join(stateDir, "projects.json")),
+    taskDatabaseFile: path.resolve(env.CLAWBRIDGE_TASK_DATABASE ?? path.join(stateDir, "tasks.sqlite")),
   };
 }
 

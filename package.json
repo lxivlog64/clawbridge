@@ -12,7 +12,13 @@
   "bugs": {
     "url": "https://github.com/lxivlog64/clawbridge/issues"
   },
-  "keywords": ["codex", "codebuddy", "workbuddy", "mcp", "agent"],
+  "keywords": [
+    "codex",
+    "codebuddy",
+    "workbuddy",
+    "mcp",
+    "agent"
+  ],
   "type": "module",
   "bin": {
     "clawbridge": "dist/src/cli.js",
@@ -30,6 +36,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "better-sqlite3": "^13.0.3",
     "zod": "^4.6.4"
   },
   "devDependencies": {

@@ -8,6 +8,9 @@
 | --- | --- | --- |
 | `CODEBUDDY_BASE_URL` | `http://127.0.0.1:8080/api/v1` | CodeBuddy Gateway API 地址 |
 | `CODEBUDDY_GATEWAY_TOKEN` | 空 | Gateway 密码；启用认证时必填 |
+| `CODEBUDDY_REQUEST_TIMEOUT_MS` | `30000` | 单次 Gateway 请求超时（毫秒） |
+| `CODEBUDDY_MAX_RESPONSE_BYTES` | `1048576` | 单次 Gateway 响应上限（字节） |
+| `CODEBUDDY_TRANSCRIPT_MAX_BYTES` | `16384` | MCP transcript 回传上限（字节） |
 
 ### SSH 启动器
 
@@ -17,7 +20,49 @@
 | `CLAWBRIDGE_LOCAL_PORT` | `18080` | Codex 电脑上的回环监听端口 |
 | `CLAWBRIDGE_REMOTE_PORT` | `8080` | CodeBuddy 电脑上的 Gateway 端口 |
 | `CLAWBRIDGE_REMOTE_CODEBUDDY` | `codebuddy` | 远端 CodeBuddy 可执行文件路径 |
+| `CLAWBRIDGE_SSH_PORT` | `22` | SSH 端口；SSH 别名另有端口时保持一致 |
 | `CLAWBRIDGE_INSTANCE` | 根据主机和端口生成 | 实例标识，用于隔离 SSH 控制连接 |
+
+### 项目台账（M1）
+
+任务数据库默认保存在 `~/.clawbridge/tasks.sqlite`，项目登记文件默认是 `~/.clawbridge/projects.json`。可通过以下变量迁移到专用私有目录；目录中可能含任务规格摘要，不要提交到 Git。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `CLAWBRIDGE_STATE_DIR` | `~/.clawbridge` | 私有状态目录 |
+| `CLAWBRIDGE_PROJECTS_FILE` | `$CLAWBRIDGE_STATE_DIR/projects.json` | 项目与执行节点配置 |
+| `CLAWBRIDGE_TASK_DATABASE` | `$CLAWBRIDGE_STATE_DIR/tasks.sqlite` | SQLite 任务台账 |
+
+示例 `projects.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "workers": [{
+    "id": "linux-dev",
+    "sshHost": "codebuddy-worker",
+    "gatewayPort": 8080,
+    "codebuddyExecutable": "/home/worker/.npm-global/bin/codebuddy",
+    "allowedRoots": ["/home/worker/workspaces"],
+    "capabilities": ["linux", "node"],
+    "maxConcurrentJobs": 1,
+    "credentialRef": "worker-linux-dev"
+  }],
+  "projects": [{
+    "id": "sample-app",
+    "repository": "owner/sample-app",
+    "defaultBranch": "main",
+    "workerId": "linux-dev",
+    "remoteRepositoryPath": "/home/worker/workspaces/sample-app",
+    "githubCredentialRef": "sample-app-delivery",
+    "requiredCapabilities": ["linux", "node"],
+    "testCommands": [["npm", "test"]],
+    "defaultModel": "ACCOUNT_AVAILABLE_MODEL_ID"
+  }]
+}
+```
+
+`credentialRef` 和 `githubCredentialRef` 只是名称，不能填令牌。M1 已提供 `clawbridge_projects`、`clawbridge_preflight`、`clawbridge_submit`、`clawbridge_tasks`、`clawbridge_status`。其中 `clawbridge_submit` 只会持久化为 `queued`，尚不会远端派发；M2 才会接入安全 worktree 派发。
 
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
 

@@ -3,11 +3,15 @@ import { loadConfig } from "./config.js";
 import { WorkBuddyOAuth } from "./oauth.js";
 import { TokenStore } from "./token-store.js";
 import { WorkBuddyClient } from "./workbuddy-client.js";
+import { ProjectRegistry } from "./project-registry.js";
+import { TaskStore } from "./task-store.js";
 
 const config = loadConfig();
 const store = new TokenStore(config.tokenFile);
 const client = new WorkBuddyClient(config, store);
 const oauth = new WorkBuddyOAuth(config, store);
+const projects = ProjectRegistry.load(config.projectsFile);
+const tasks = new TaskStore(config.taskDatabaseFile);
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -30,12 +34,20 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ messages: await client.history({ limit: 20 }) }, null, 2));
       return;
     }
+    case "projects":
+      console.log(JSON.stringify({ projects: projects.list(), registryFile: config.projectsFile }, null, 2));
+      return;
+    case "tasks":
+      console.log(JSON.stringify({ tasks: tasks.list({ limit: 20 }) }, null, 2));
+      return;
     default:
       console.log(`workbuddy-bridge commands:
   auth [--no-open]   Authorize through a loopback OAuth callback
   status             Check whether the PC local assistant is online
   send <message>     Send a plain-text instruction
-  history            Read the 20 most recent messages`);
+  history            Read the 20 most recent messages
+  projects           List registered ClawBridge projects
+  tasks              List the 20 most recent durable ClawBridge tasks`);
   }
 }
 
