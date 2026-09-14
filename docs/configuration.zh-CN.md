@@ -73,7 +73,9 @@
 
 M3 已提供 `clawbridge_verify_delivery` 和 `clawbridge_create_draft_pr`。在任务刷新为 `succeeded` 后，必须先提供 CodeBuddy worktree 的实际路径进行核验；该路径必须处于项目登记的 `allowedRoots` 内，且分支不能是默认分支。核验会读取 Git HEAD 和分支名。
 
-草稿 PR 使用执行节点上的 `gh` CLI 已有登录态。请为执行节点配置仅限目标仓库写入权限的 GitHub 身份，并在创建前确认任务分支已经推送。ClawBridge 不会自动推送、强推、合并或部署。未配置 `gh`、分支未推送或 SHA 不一致都会使交付状态变为 `failed`，而非伪造 PR 地址。
+草稿 PR 使用执行节点上的 `gh` CLI 已有登录态。请为执行节点配置仅限目标仓库写入权限的 GitHub 身份。ClawBridge 不会强推、合并或部署；未配置 `gh`、推送失败或 SHA 不一致都会使交付状态变为 `failed`，而非伪造 PR 地址。
+
+创建草稿 PR 时，ClawBridge 会以普通 Git 程序执行非强制 `git push --set-upstream <deliveryRemote> <taskBranch>`，再核验远端 SHA；不会要求模型自行推送，也不会 force push。已存在同一任务分支的 PR 会被复用，不重复创建。
 
 ### 真实连接回归（M0）
 

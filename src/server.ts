@@ -197,15 +197,27 @@ server.tool(
     const project = projects.require(task.projectId);
     const worker = projects.workerFor(task.projectId);
     const branch = await remoteWorker.git(worker, task.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    const remoteHead = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", project.deliveryRemote, "HEAD"]);
-    if (branch.exitCode !== 0 || remoteHead.exitCode !== 0) {
-      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Could not verify Git branch or origin." }), created: false });
+    if (branch.exitCode !== 0) {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Could not verify the task Git branch." }), created: false });
     }
     const branchName = branch.stdout.trim();
+    if (!branchName || branchName === project.defaultBranch || (task.branch && branchName !== task.branch)) {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Task worktree is not on its recorded delivery branch." }), created: false });
+    }
+    tasks.markDelivery(taskId, "pushing");
+    const pushedBranch = await remoteWorker.git(worker, task.worktreePath, ["push", "--set-upstream", project.deliveryRemote, branchName]);
+    if (pushedBranch.exitCode !== 0) {
+      return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: pushedBranch.stderr.slice(-2_000) || "Could not push the task branch." }), created: false });
+    }
     const pushed = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", project.deliveryRemote, `refs/heads/${branchName}`]);
     if (pushed.exitCode !== 0 || !pushed.stdout.startsWith(task.headSha)) {
       return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Verified commit is not pushed to the task branch." }), created: false });
     }
+    const existing = await remoteWorker.gh(worker, task.worktreePath, ["pr", "view", branchName, "--json", "url", "--jq", ".url"]);
+    if (existing.exitCode === 0 && /^https:\/\//.test(existing.stdout.trim())) {
+      return json({ task: tasks.markDelivery(taskId, "ready", { prUrl: existing.stdout.trim() }), created: false, reused: true });
+    }
+    tasks.markDelivery(taskId, "creating_pr");
     const created = await remoteWorker.gh(worker, task.worktreePath, ["pr", "create", "--draft", "--base", project.defaultBranch, "--head", branchName, "--title", title, "--body", body]);
     if (created.exitCode !== 0) {
       return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: created.stderr.slice(-2_000) || "GitHub draft PR creation failed." }), created: false });
