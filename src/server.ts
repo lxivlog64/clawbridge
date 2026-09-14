@@ -210,6 +210,54 @@ server.tool(
 );
 
 server.tool(
+  "clawbridge_logs",
+  "Read bounded recent worker transcript events for one dispatched task. Model thought events and oversized content are filtered by the CodeBuddy client.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = requireRemoteTask(taskId);
+    return json({ taskId, transcript: await codeBuddy.transcript(task.remoteJobId!) });
+  },
+);
+
+server.tool(
+  "clawbridge_result",
+  "Return compact verified delivery facts. A task is delivered only when deliveryState is ready; worker prose is not treated as proof.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    return json({
+      task,
+      verified: task.deliveryState === "ready" && Boolean(task.headSha && task.prUrl),
+      nextAction: task.deliveryState === "ready" ? "Review the exact recorded SHA." : "Delivery is not yet verified.",
+    });
+  },
+);
+
+server.tool(
+  "clawbridge_review_context",
+  "Build bounded review context for an already delivered task: fixed SHA, PR URL, merge base, diff stat, and changed paths. It never marks the task approved.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = tasks.get(taskId);
+    if (!task) throw new Error(`Unknown task id ${taskId}.`);
+    if (task.deliveryState !== "ready" || !task.worktreePath || !task.headSha) throw new Error("A verified draft PR is required before review context is available.");
+    const project = projects.require(task.projectId);
+    const worker = projects.workerFor(task.projectId);
+    const base = await remoteWorker.git(worker, task.worktreePath, ["merge-base", `origin/${project.defaultBranch}`, task.headSha]);
+    if (base.exitCode !== 0 || !/^[0-9a-f]{40}$/i.test(base.stdout.trim())) throw new Error("Could not determine a merge base for review.");
+    const baseSha = base.stdout.trim();
+    const [stat, paths] = await Promise.all([
+      remoteWorker.git(worker, task.worktreePath, ["diff", "--stat", baseSha, task.headSha]),
+      remoteWorker.git(worker, task.worktreePath, ["diff", "--name-only", baseSha, task.headSha]),
+    ]);
+    if (stat.exitCode !== 0 || paths.exitCode !== 0) throw new Error("Could not read the verified Git diff.");
+    return json({ taskId, specHash: task.specHash, baseSha, headSha: task.headSha, prUrl: task.prUrl,
+      diffStat: stat.stdout.slice(0, 8_000), changedPaths: paths.stdout.split("\n").filter(Boolean).slice(0, 500) });
+  },
+);
+
+server.tool(
   "clawbridge_tasks",
   "List compact durable task records. Status is a recorded lifecycle state, not an estimated progress percentage.",
   {
