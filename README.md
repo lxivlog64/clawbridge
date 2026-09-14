@@ -128,6 +128,12 @@ codex mcp add clawbridge --env CLAWBRIDGE_SSH_HOST="$CLAWBRIDGE_SSH_HOST" \
 
 所有远程选项见[完整配置指南](docs/configuration.zh-CN.md)。
 
+### 多个执行节点
+
+多个 CodeBuddy 电脑需要分别登记不同的 MCP 名称，并为每个实例设置唯一的 `CLAWBRIDGE_LOCAL_PORT` 和 `CLAWBRIDGE_INSTANCE`。例如 `clawbridge-dev`、`clawbridge-test`。完整命令见[多实例配置](docs/configuration.zh-CN.md#配置多个-clawbridge)。
+
+同一台 CodeBuddy 电脑上的多个项目不需要多个 ClawBridge；派发时使用不同的远端 `cwd` 即可。
+
 ## 在 Codex 中使用
 
 重新加载 Codex 后，可以这样描述任务：

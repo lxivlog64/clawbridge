@@ -17,8 +17,42 @@
 | `CLAWBRIDGE_LOCAL_PORT` | `18080` | Codex 电脑上的回环监听端口 |
 | `CLAWBRIDGE_REMOTE_PORT` | `8080` | CodeBuddy 电脑上的 Gateway 端口 |
 | `CLAWBRIDGE_REMOTE_CODEBUDDY` | `codebuddy` | 远端 CodeBuddy 可执行文件路径 |
+| `CLAWBRIDGE_INSTANCE` | 根据主机和端口生成 | 实例标识，用于隔离 SSH 控制连接 |
 
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
+
+## 配置多个 ClawBridge
+
+每个远端执行节点必须使用不同的 MCP 名称和本机端口。例如：
+
+```bash
+codex mcp add clawbridge-dev \
+  --env CLAWBRIDGE_INSTANCE=dev \
+  --env CLAWBRIDGE_SSH_HOST=codebuddy-dev \
+  --env CLAWBRIDGE_LOCAL_PORT=18180 \
+  --env CLAWBRIDGE_REMOTE_PORT=8080 \
+  --env CLAWBRIDGE_REMOTE_CODEBUDDY=codebuddy \
+  -- /absolute/path/to/clawbridge/scripts/ssh-mcp.sh
+
+codex mcp add clawbridge-test \
+  --env CLAWBRIDGE_INSTANCE=test \
+  --env CLAWBRIDGE_SSH_HOST=codebuddy-test \
+  --env CLAWBRIDGE_LOCAL_PORT=18181 \
+  --env CLAWBRIDGE_REMOTE_PORT=8080 \
+  --env CLAWBRIDGE_REMOTE_CODEBUDDY=codebuddy \
+  -- /absolute/path/to/clawbridge/scripts/ssh-mcp.sh
+```
+
+检查登记：
+
+```bash
+codex mcp get clawbridge-dev
+codex mcp get clawbridge-test
+```
+
+在 Codex 中明确指定服务名，例如：“使用 `clawbridge-dev` 的 `codebuddy_health`”，或“把测试任务交给 `clawbridge-test`”。MCP 服务名充当工具命名空间，避免同名 CodeBuddy 工具选错节点。
+
+如果多个项目都在同一台 CodeBuddy 电脑、使用同一账号和同一个 Gateway，则不需要多个 ClawBridge。只保留一个实例，在每次任务中把 `cwd` 指向不同项目即可。
 
 ## 验证远端服务
 
