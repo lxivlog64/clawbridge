@@ -484,8 +484,9 @@ server.tool(
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-function permissionMode(profile: string | undefined): "default" | "acceptEdits" {
-  return profile === "acceptEdits" ? "acceptEdits" : "default";
+function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" {
+  if (profile === "acceptEdits" || profile === "auto") return profile;
+  return "default";
 }
 
 function requireRemoteTask(taskId: string) {
