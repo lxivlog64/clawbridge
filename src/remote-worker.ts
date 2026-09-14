@@ -50,6 +50,39 @@ export class RemoteWorker {
   }
 }
 
+/** Same fixed-command interface as RemoteWorker, for a Worker Agent running next to CodeBuddy. */
+export class LocalWorker {
+  constructor(private readonly runner: typeof spawn = spawn) {}
+
+  async git(_worker: RegisteredWorker, cwd: string, args: string[]): Promise<RemoteCommandResult> {
+    return this.run("git", args, cwd);
+  }
+
+  async gh(_worker: RegisteredWorker, cwd: string, args: string[]): Promise<RemoteCommandResult> {
+    return this.run("gh", args, cwd);
+  }
+
+  async mkdir(_worker: RegisteredWorker, directory: string): Promise<RemoteCommandResult> {
+    return this.run("mkdir", ["-p", directory]);
+  }
+
+  private async run(program: "git" | "gh" | "mkdir", args: string[], cwd?: string): Promise<RemoteCommandResult> {
+    return new Promise((resolve, reject) => {
+      const child = this.runner(program, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+      const output: Buffer[] = [];
+      const errors: Buffer[] = [];
+      child.stdout?.on("data", (chunk: Buffer) => output.push(chunk));
+      child.stderr?.on("data", (chunk: Buffer) => errors.push(chunk));
+      child.on("error", reject);
+      child.on("close", (code) => resolve({
+        exitCode: code ?? 1,
+        stdout: Buffer.concat(output).toString("utf8").slice(0, 64_000),
+        stderr: Buffer.concat(errors).toString("utf8").slice(0, 8_000),
+      }));
+    });
+  }
+}
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }

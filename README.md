@@ -141,6 +141,10 @@ codex mcp add clawbridge --env CLAWBRIDGE_SSH_HOST="$CLAWBRIDGE_SSH_HOST" \
 
 所有远程选项见[完整配置指南](docs/configuration.zh-CN.md)。
 
+### 云端 Ubuntu VPS（实验性）
+
+如果希望 Mac 关机后仍能保存任务、等待 Worker 完成并创建草稿 PR，可把控制平面部署到 Ubuntu VPS。VPS 不暴露 CodeBuddy；私有 Linux Worker 通过出站 HTTPS 领取任务。部署与安全边界见[云端控制平面指南](docs/cloud-control.zh-CN.md)。
+
 ### 多个执行节点
 
 多个 CodeBuddy 电脑需要分别登记不同的 MCP 名称，并为每个实例设置唯一的 `CLAWBRIDGE_LOCAL_PORT` 和 `CLAWBRIDGE_INSTANCE`。例如 `clawbridge-dev`、`clawbridge-test`。完整命令见[多实例配置](docs/configuration.zh-CN.md#配置多个-clawbridge)。

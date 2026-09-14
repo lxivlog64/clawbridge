@@ -22,7 +22,8 @@
   "type": "module",
   "bin": {
     "clawbridge": "dist/src/cli.js",
-    "clawbridge-mcp": "dist/src/server.js"
+    "clawbridge-mcp": "dist/src/server.js",
+    "clawbridge-cloud-mcp": "dist/src/cloud-mcp.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

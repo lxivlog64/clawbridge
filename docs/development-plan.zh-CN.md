@@ -3,7 +3,7 @@
 版本：草案 v1.0  
 日期：2026-09-14  
 适用范围：从现有 ClawBridge MCP 桥接器升级，支持多项目、多执行节点和 GitHub PR 交付。  
-状态：M0 基础修复实施中；除本文件明确标为当前能力的项目外，新增工具、命令、配置与状态均为设计，不代表已实现。
+状态：本地/SSH 交付链（M0–M5）已实现；M3 已在真实 Linux Worker、GitHub 草稿 PR 与 Codex 固定 SHA 审查中验证。云端控制平面（M6）正在实现，尚未部署到用户 VPS。
 
 ## 1. 目标与约束
 
@@ -252,17 +252,19 @@ GitHub 身份可采用专用机器账号或 GitHub App；不要给执行节点�
 | M3 GitHub 交付 | 专用凭据、推送、草稿 PR、交付校验 | 真实测试仓库完成开发到 PR，SHA 一致 |
 | M4 无人值守 | 协调服务、阻塞识别、通知 outbox、取消 | 关闭 Codex 后可继续并记录终态；恢复后可查询 |
 | M5 审查与文档 | 精简审查上下文、部署与迁移指南、用量指标 | 可在新 Codex 任务按 taskId 获取准确交付并审查 |
+| M6 云端控制平面 | VPS 任务 API、私有 Worker 出站领取、Mac 云端 MCP | Mac 无需 SSH Worker；VPS 不暴露 CodeBuddy；真实 Ubuntu 部署验收 |
 
 先串行完成一个小任务端到端，再启用多项目并发。每阶段独立分支/PR，禁止一次性重写后宣称全部完成。
 
 ### 当前实施进度
 
-- M0：已实现 CodeBuddy `GET /jobs/:id` 的 `data.job` 兼容解析、请求超时、响应大小限制、transcript 大小限制和思考事件过滤；SSH 启动器已改用 `id -u` 并增加启动锁、BatchMode、连接超时与保活选项。真实双端启动与 Gateway health 回归测试已加入，需显式设置 `CLAWBRIDGE_INTEGRATION=1` 执行。
-- M1：实施中。项目注册、静态预检、SQLite 任务台账、幂等创建和任务查询正在实现；不含远端派发。
-- M2：实施中。项目受限的 CodeBuddy 派发、状态刷新、普通追问和取消已实现；远端准备器会检查仓库干净、固定 base SHA 并在源仓库旁创建受控 worktree/分支。断线回执关联、工作区恢复和真实端到端验证仍未完成，不能声称达到 M2 完成标准。
-- M3：实施中。远端受限 Git 核验、非强制分支推送、已有 PR 去重及 GitHub CLI 草稿 PR 创建已实现。尚未完成真实测试仓库的端到端验证。
-- M4：已实现 SQLite 持久事件 outbox、MCP 查询/确认接口、独立 coordinator 轮询命令、可选 Webhook 投递和 macOS/Linux 用户服务安装脚本；真实常驻服务验收需由用户在其私有环境文件配置后执行。
-- M5：实施中。受限日志、精简交付结果、固定 SHA 的审查上下文、审查结论记录和 HEAD 变化失效检查已实现；不包含自动审查结论。
+- M0：已实现并验证 SSH/MCP/Gateway 连通性；包含 API 兼容、超时与响应限制、受限 transcript、Linux SSH 启动兼容和短控制 socket 路径。
+- M1：已实现项目登记、静态预检、SQLite 台账、幂等创建、状态与事件查询。
+- M2：已实现受限远端 worktree 准备、固定 base SHA、源工作区干净检查、分支隔离和不确定回执保留；真实 M3 演练证明默认分支未被任务修改。
+- M3：已实现并真实验证。任务仅在隔离 worktree 提交，ClawBridge 校验 SHA 并非强制推送任务分支，创建草稿 PR 后由 Codex 对固定 SHA 审查。
+- M4：代码已实现 SQLite outbox、协调器、Webhook 重试和用户服务安装脚本；真实“退出 Codex、重启 Mac/VPS 后恢复、Webhook 失败重试”验收仍待部署环境完成。
+- M5：已实现精简结果、固定 SHA 审查上下文、审查记录与 HEAD 失效检查；真实 M3 草稿 PR 已完成一次 Codex 审查。用量指标与自动修复轮次执行仍待增强。
+- M6：已实现实验性 VPS 控制 API、Token 鉴权、Worker 心跳/租约领取/状态回传、本地 Worker 执行器及 Mac 云端 MCP 提交/查询入口；等待 Ubuntu VPS 部署、TLS 反向代理与端到端验收。
 
 ## 14. 验收场景
 

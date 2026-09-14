@@ -6,6 +6,11 @@ import { WorkBuddyClient } from "./workbuddy-client.js";
 import { ProjectRegistry } from "./project-registry.js";
 import { TaskStore } from "./task-store.js";
 import { Coordinator } from "./coordinator.js";
+import { CloudTaskStore } from "./cloud-task-store.js";
+import { createCloudControlServer } from "./cloud-control.js";
+import { CloudControlClient } from "./cloud-control-client.js";
+import { CloudWorkerAgent } from "./cloud-worker-agent.js";
+import { CodeBuddyClient } from "./codebuddy-client.js";
 
 const config = loadConfig();
 const store = new TokenStore(config.tokenFile);
@@ -53,6 +58,35 @@ async function main(): Promise<void> {
       await coordinator.run(config.coordinatorPollMs, abort.signal);
       return;
     }
+    case "cloud-server": {
+      const cloudTasks = new CloudTaskStore(config.cloudDatabaseFile);
+      const server = createCloudControlServer({ apiToken: config.cloudApiToken, workerTokens: config.cloudWorkerTokens, projects, tasks: cloudTasks });
+      await new Promise<void>((resolve) => server.listen(config.cloudPort, config.cloudListenHost, resolve));
+      console.log(JSON.stringify({ listening: `${config.cloudListenHost}:${config.cloudPort}` }));
+      const close = () => server.close(() => { cloudTasks.close(); process.exit(0); });
+      process.once("SIGINT", close);
+      process.once("SIGTERM", close);
+      return;
+    }
+    case "cloud-worker": {
+      if (!config.cloudControlUrl || !config.cloudWorkerId || !config.cloudWorkerToken) {
+        throw new Error("CLAWBRIDGE_CLOUD_CONTROL_URL, CLAWBRIDGE_CLOUD_WORKER_ID, and CLAWBRIDGE_CLOUD_WORKER_TOKEN are required for cloud-worker.");
+      }
+      const agent = new CloudWorkerAgent({
+        workerId: config.cloudWorkerId, projects,
+        control: new CloudControlClient(config.cloudControlUrl, config.cloudWorkerToken),
+        codeBuddy: new CodeBuddyClient(config), pollMs: config.cloudWorkerPollMs,
+      });
+      if (args.includes("--once")) {
+        console.log(JSON.stringify({ claimed: await agent.once() }, null, 2));
+        return;
+      }
+      const abort = new AbortController();
+      process.once("SIGINT", () => abort.abort());
+      process.once("SIGTERM", () => abort.abort());
+      await agent.run(abort.signal);
+      return;
+    }
     default:
       console.log(`workbuddy-bridge commands:
   auth [--no-open]   Authorize through a loopback OAuth callback
@@ -61,7 +95,9 @@ async function main(): Promise<void> {
   history            Read the 20 most recent messages
   projects           List registered ClawBridge projects
   tasks              List the 20 most recent durable ClawBridge tasks
-  coordinator [--once]  Refresh remote task states and write local events`);
+  coordinator [--once]  Refresh remote task states and write local events
+  cloud-server       Start the authenticated cloud control API
+  cloud-worker [--once]  Claim and execute private Worker tasks from cloud control`);
   }
 }
 

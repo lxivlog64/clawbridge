@@ -17,6 +17,15 @@ export interface BridgeConfig {
   taskDatabaseFile: string;
   coordinatorPollMs: number;
   notificationWebhookUrl?: string;
+  cloudDatabaseFile: string;
+  cloudListenHost: string;
+  cloudPort: number;
+  cloudApiToken: string;
+  cloudWorkerTokens: Record<string, string>;
+  cloudControlUrl: string;
+  cloudWorkerId: string;
+  cloudWorkerToken: string;
+  cloudWorkerPollMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -55,8 +64,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     projectsFile: path.resolve(env.CLAWBRIDGE_PROJECTS_FILE ?? path.join(stateDir, "projects.json")),
     taskDatabaseFile: path.resolve(env.CLAWBRIDGE_TASK_DATABASE ?? path.join(stateDir, "tasks.sqlite")),
     coordinatorPollMs: positiveInteger(env.CLAWBRIDGE_COORDINATOR_POLL_MS, 15_000, "CLAWBRIDGE_COORDINATOR_POLL_MS"),
+    cloudDatabaseFile: path.resolve(env.CLAWBRIDGE_CLOUD_DATABASE ?? path.join(stateDir, "cloud.sqlite")),
+    cloudListenHost: env.CLAWBRIDGE_CLOUD_LISTEN_HOST ?? "127.0.0.1",
+    cloudPort: positiveInteger(env.CLAWBRIDGE_CLOUD_PORT, 43_120, "CLAWBRIDGE_CLOUD_PORT"),
+    cloudApiToken: env.CLAWBRIDGE_CLOUD_API_TOKEN ?? "",
+    cloudWorkerTokens: workerTokens(env.CLAWBRIDGE_CLOUD_WORKER_TOKENS_JSON),
+    cloudControlUrl: (env.CLAWBRIDGE_CLOUD_CONTROL_URL ?? "").replace(/\/$/, ""),
+    cloudWorkerId: env.CLAWBRIDGE_CLOUD_WORKER_ID ?? "",
+    cloudWorkerToken: env.CLAWBRIDGE_CLOUD_WORKER_TOKEN ?? "",
+    cloudWorkerPollMs: positiveInteger(env.CLAWBRIDGE_CLOUD_WORKER_POLL_MS, 10_000, "CLAWBRIDGE_CLOUD_WORKER_POLL_MS"),
     ...(env.CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL ? { notificationWebhookUrl: env.CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL } : {}),
   };
+}
+
+function workerTokens(value: string | undefined): Record<string, string> {
+  if (!value) return {};
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error("CLAWBRIDGE_CLOUD_WORKER_TOKENS_JSON must be a JSON object."); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("CLAWBRIDGE_CLOUD_WORKER_TOKENS_JSON must be a JSON object.");
+  const tokens: Record<string, string> = {};
+  for (const [workerId, token] of Object.entries(parsed)) {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(workerId) || typeof token !== "string" || token.length < 16) {
+      throw new Error("CLAWBRIDGE_CLOUD_WORKER_TOKENS_JSON contains an invalid worker token.");
+    }
+    tokens[workerId] = token;
+  }
+  return tokens;
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {

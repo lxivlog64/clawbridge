@@ -24,6 +24,15 @@ test("client sends a local-assistant message with bearer auth", async () => {
     projectsFile: path.join(directory, "projects.json"),
     taskDatabaseFile: path.join(directory, "tasks.sqlite"),
     coordinatorPollMs: 15_000,
+    cloudDatabaseFile: "/tmp/clawbridge-client-test/cloud.sqlite",
+    cloudListenHost: "127.0.0.1",
+    cloudPort: 43120,
+    cloudApiToken: "cloud-api-token-for-tests",
+    cloudWorkerTokens: {},
+    cloudControlUrl: "",
+    cloudWorkerId: "",
+    cloudWorkerToken: "",
+    cloudWorkerPollMs: 10_000,
   };
   const store = new TokenStore(config.tokenFile);
   await store.saveToken({
