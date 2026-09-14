@@ -197,12 +197,12 @@ server.tool(
     const project = projects.require(task.projectId);
     const worker = projects.workerFor(task.projectId);
     const branch = await remoteWorker.git(worker, task.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    const remoteHead = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", "origin", "HEAD"]);
+    const remoteHead = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", project.deliveryRemote, "HEAD"]);
     if (branch.exitCode !== 0 || remoteHead.exitCode !== 0) {
       return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Could not verify Git branch or origin." }), created: false });
     }
     const branchName = branch.stdout.trim();
-    const pushed = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", "origin", `refs/heads/${branchName}`]);
+    const pushed = await remoteWorker.git(worker, task.worktreePath, ["ls-remote", project.deliveryRemote, `refs/heads/${branchName}`]);
     if (pushed.exitCode !== 0 || !pushed.stdout.startsWith(task.headSha)) {
       return json({ task: tasks.markDelivery(taskId, "failed", { blockReason: "Verified commit is not pushed to the task branch." }), created: false });
     }
@@ -251,7 +251,7 @@ server.tool(
     if (task.deliveryState !== "ready" || !task.worktreePath || !task.headSha) throw new Error("A verified draft PR is required before review context is available.");
     const project = projects.require(task.projectId);
     const worker = projects.workerFor(task.projectId);
-    const base = await remoteWorker.git(worker, task.worktreePath, ["merge-base", `origin/${project.defaultBranch}`, task.headSha]);
+    const base = await remoteWorker.git(worker, task.worktreePath, ["merge-base", `${project.deliveryRemote}/${project.defaultBranch}`, task.headSha]);
     if (base.exitCode !== 0 || !/^[0-9a-f]{40}$/i.test(base.stdout.trim())) throw new Error("Could not determine a merge base for review.");
     const baseSha = base.stdout.trim();
     const [stat, paths] = await Promise.all([

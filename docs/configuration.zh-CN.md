@@ -51,6 +51,7 @@
   "projects": [{
     "id": "sample-app",
     "repository": "owner/sample-app",
+    "deliveryRemote": "origin",
     "defaultBranch": "main",
     "workerId": "linux-dev",
     "remoteRepositoryPath": "/home/worker/workspaces/sample-app",

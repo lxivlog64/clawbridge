@@ -9,7 +9,7 @@ const worker: RegisteredWorker = {
   allowedRoots: ["/srv/projects"], capabilities: [], maxConcurrentJobs: 1,
 };
 const project: RegisteredProject = {
-  id: "app", repository: "owner/app", defaultBranch: "main", workerId: "linux",
+  id: "app", repository: "owner/app", deliveryRemote: "origin", defaultBranch: "main", workerId: "linux",
   remoteRepositoryPath: "/srv/projects/app", requiredCapabilities: [], testCommands: [], buildCommands: [],
   maxRuntimeMinutes: 120, maxRepairRounds: 1, maxConcurrentJobs: 1,
 };

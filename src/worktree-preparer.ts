@@ -27,9 +27,9 @@ export async function prepareWorktree(
   ]);
   if (repository.exitCode !== 0 || repository.stdout.trim() !== "true") return { ok: false, reason: "Registered remote repository is not a Git worktree." };
   if (status.exitCode !== 0 || status.stdout.trim()) return { ok: false, reason: "Registered remote repository has uncommitted changes; handoff is required." };
-  const fetched = await remote.git(worker, repositoryPath, ["fetch", "--no-tags", "origin", project.defaultBranch]);
+  const fetched = await remote.git(worker, repositoryPath, ["fetch", "--no-tags", project.deliveryRemote, project.defaultBranch]);
   if (fetched.exitCode !== 0) return { ok: false, reason: `Cannot fetch base branch: ${fetched.stderr.slice(-1_000)}` };
-  const base = await remote.git(worker, repositoryPath, ["rev-parse", `origin/${project.defaultBranch}`]);
+  const base = await remote.git(worker, repositoryPath, ["rev-parse", `${project.deliveryRemote}/${project.defaultBranch}`]);
   const baseSha = base.stdout.trim();
   if (base.exitCode !== 0 || !/^[0-9a-f]{40}$/i.test(baseSha)) return { ok: false, reason: "Cannot resolve a fixed base SHA." };
   const mkdir = await remote.mkdir(worker, `${repositoryPath}/.clawbridge-worktrees`);

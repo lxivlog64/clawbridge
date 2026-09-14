@@ -5,6 +5,7 @@ import { z } from "zod";
 const projectSchema = z.object({
   id: z.string().min(1).max(80).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
   repository: z.string().min(1).max(300),
+  deliveryRemote: z.string().min(1).max(80).regex(/^[A-Za-z0-9._-]+$/).default("origin"),
   githubCredentialRef: z.string().min(1).max(120).optional(),
   defaultBranch: z.string().min(1).max(200),
   workerId: z.string().min(1).max(80),

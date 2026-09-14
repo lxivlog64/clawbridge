@@ -15,7 +15,7 @@ test("project registry validates a project against its worker allowlist", async 
       codebuddyExecutable: "/opt/codebuddy/bin/codebuddy", allowedRoots: ["/srv/projects"],
     }],
     projects: [{
-      id: "sample-app", repository: "owner/sample-app", defaultBranch: "main", workerId: "linux-dev",
+      id: "sample-app", repository: "owner/sample-app", deliveryRemote: "origin", defaultBranch: "main", workerId: "linux-dev",
       remoteRepositoryPath: "/srv/projects/sample-app", requiredCapabilities: ["linux"],
     }],
   }));
