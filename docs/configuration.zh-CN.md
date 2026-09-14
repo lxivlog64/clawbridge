@@ -25,7 +25,7 @@
 
 ### 项目台账（M1）
 
-任务数据库默认保存在 `~/.clawbridge/tasks.sqlite`，项目登记文件默认是 `~/.clawbridge/projects.json`。可通过以下变量迁移到专用私有目录；目录中可能含任务规格摘要，不要提交到 Git。
+任务数据库默认保存在 `~/.clawbridge/tasks.sqlite`，项目登记文件默认是 `~/.clawbridge/projects.json`。可通过以下变量迁移到专用私有目录；任务台账会保存完整任务规格以便后续安全派发，不要提交到 Git 或共享目录。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |

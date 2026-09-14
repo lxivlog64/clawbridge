@@ -36,11 +36,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@types/better-sqlite3": "^9.6.0",
     "better-sqlite3": "^13.0.3",
     "zod": "^4.6.4"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.0.0",
     "typescript": "^7.0.2"
   }
