@@ -26,6 +26,15 @@ export interface TaskRecord {
   reviewState: ReviewState;
 }
 
+export interface TaskEvent {
+  eventId: string;
+  taskId: string;
+  kind: string;
+  summary: string;
+  createdAt: string;
+  deliveredAt?: string;
+}
+
 interface TaskRow {
   task_id: string;
   idempotency_key: string;
@@ -76,6 +85,11 @@ export class TaskStore {
         review_state TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS tasks_project_created ON tasks(project_id, created_at DESC);
+      CREATE TABLE IF NOT EXISTS task_events (
+        event_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+        summary TEXT NOT NULL, created_at TEXT NOT NULL, delivered_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS task_events_pending ON task_events(delivered_at, created_at ASC);
     `);
     this.ensureColumn("spec", "TEXT");
     this.ensureColumn("remote_job_id", "TEXT");
@@ -107,6 +121,7 @@ export class TaskStore {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(task.taskId, task.idempotencyKey, task.projectId, input.spec, task.specHash, task.requestedModel ?? null,
         task.createdAt, task.updatedAt, task.executionState, task.deliveryState, task.reviewState);
+    this.emit(task.taskId, "task.queued", "Task was queued.");
     return { task, reused: false };
   }
 
@@ -129,6 +144,17 @@ export class TaskStore {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = this.db.prepare(`SELECT * FROM tasks ${where} ORDER BY created_at DESC LIMIT ?`).all(...values) as TaskRow[];
     return rows.map(taskFromRow);
+  }
+
+  listEvents(limit: number, pendingOnly = false): TaskEvent[] {
+    const where = pendingOnly ? "WHERE delivered_at IS NULL" : "";
+    const rows = this.db.prepare(`SELECT * FROM task_events ${where} ORDER BY created_at ASC LIMIT ?`).all(limit) as Array<{ event_id: string; task_id: string; kind: string; summary: string; created_at: string; delivered_at: string | null }>;
+    return rows.map((row) => ({ eventId: row.event_id, taskId: row.task_id, kind: row.kind, summary: row.summary, createdAt: row.created_at, ...(row.delivered_at ? { deliveredAt: row.delivered_at } : {}) }));
+  }
+
+  acknowledgeEvent(eventId: string): boolean {
+    return this.db.prepare("UPDATE task_events SET delivered_at = ? WHERE event_id = ? AND delivered_at IS NULL")
+      .run(new Date().toISOString(), eventId).changes === 1;
   }
 
   activeCount(projectId: string): number {
@@ -170,7 +196,16 @@ export class TaskStore {
         patch.remoteJobId ?? existing.remoteJobId ?? null, patch.blockReason ?? null,
         patch.lastEventAt ?? existing.lastEventAt ?? null, patch.worktreePath ?? existing.worktreePath ?? null,
         patch.headSha ?? existing.headSha ?? null, patch.prUrl ?? existing.prUrl ?? null, now, taskId);
-    return this.get(taskId)!;
+    const updated = this.get(taskId)!;
+    if (updated.executionState !== existing.executionState || updated.deliveryState !== existing.deliveryState || updated.blockReason !== existing.blockReason) {
+      this.emit(taskId, "task.state_changed", `${existing.executionState}/${existing.deliveryState} → ${updated.executionState}/${updated.deliveryState}${updated.blockReason ? `: ${updated.blockReason.slice(0, 500)}` : ""}`);
+    }
+    return updated;
+  }
+
+  private emit(taskId: string, kind: string, summary: string): void {
+    this.db.prepare("INSERT INTO task_events (event_id, task_id, kind, summary, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(crypto.randomUUID(), taskId, kind, summary, new Date().toISOString());
   }
 }
 

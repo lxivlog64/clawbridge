@@ -16,6 +16,7 @@ test("task store persists queued work and deduplicates identical requests", asyn
     projectId: "sample-app", spec: "Implement the profile page", idempotencyKey: "request-0001",
   });
   assert.equal(first.reused, false);
+  assert.equal(firstStore.listEvents(10).length, 1);
   assert.equal(repeated.reused, true);
   assert.equal(repeated.task.taskId, first.task.taskId);
   firstStore.close();
@@ -31,6 +32,9 @@ test("task store persists queued work and deduplicates identical requests", asyn
   const verified = secondStore.markVerified(first.task.taskId, "/srv/projects/sample/.worktrees/task", "a".repeat(40));
   assert.equal(verified.headSha, "a".repeat(40));
   assert.equal(secondStore.markDelivery(first.task.taskId, "ready", { prUrl: "https://example.test/pr/1" }).prUrl, "https://example.test/pr/1");
+  const event = secondStore.listEvents(10, true)[0];
+  assert.ok(event);
+  assert.equal(secondStore.acknowledgeEvent(event!.eventId), true);
   assert.equal(secondStore.list({ limit: 10 }).length, 1);
   assert.throws(() => secondStore.createOrGet({
     projectId: "sample-app", spec: "A different request", idempotencyKey: "request-0001",

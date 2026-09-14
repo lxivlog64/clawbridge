@@ -270,6 +270,20 @@ server.tool(
 );
 
 server.tool(
+  "clawbridge_events",
+  "Read durable ClawBridge task events. Events form a local notification outbox and contain only a short status summary.",
+  { pendingOnly: z.boolean().default(true), limit: z.number().int().min(1).max(100).default(20) },
+  async ({ pendingOnly, limit }) => json({ events: tasks.listEvents(limit, pendingOnly) }),
+);
+
+server.tool(
+  "clawbridge_acknowledge_event",
+  "Acknowledge delivery of a local task event after it has been shown to the user or delivered by a configured notifier.",
+  { eventId: z.string().uuid() },
+  async ({ eventId }) => json({ acknowledged: tasks.acknowledgeEvent(eventId) }),
+);
+
+server.tool(
   "clawbridge_status",
   "Read one durable task record. Execution, delivery, and review states are deliberately separate.",
   { taskId: z.string().uuid() },
