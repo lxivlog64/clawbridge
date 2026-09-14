@@ -93,6 +93,19 @@ npm test
 
 如需外部通知，可设置 `CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL`。协调器会向该地址 POST 事件 ID、任务 ID、状态类型和简短摘要；成功后确认 outbox，失败则以指数退避保留重试。Webhook URL 可能包含访问凭据，应只放在私有环境变量中，不能提交到仓库。未设置该变量时绝不会发送网络通知。
 
+在远端 CodeBuddy 模式下，可创建私有环境文件 `~/.config/clawbridge/coordinator.env`（权限建议 `600`）：
+
+```bash
+export CLAWBRIDGE_SSH_HOST=codebuddy-worker
+export CLAWBRIDGE_REMOTE_CODEBUDDY=/absolute/path/to/codebuddy
+export CLAWBRIDGE_LOCAL_PORT=18180
+export CLAWBRIDGE_INSTANCE=coordinator
+export CLAWBRIDGE_COORDINATOR_POLL_MS=15000
+# 可选：export CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL='https://…'
+```
+
+然后运行 `scripts/install-coordinator-service.sh`。它在 macOS 创建 launchd 用户服务，在 Linux 创建 systemd 用户服务；服务仅以当前用户运行。更新项目后重新执行安装脚本即可刷新服务定义。卸载可在 macOS 使用 `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.clawbridge.coordinator.plist`，在 Linux 使用 `systemctl --user disable --now clawbridge-coordinator.service`。
+
 完成草稿 PR 后，用 `clawbridge_review_context` 获取固定 SHA 的变更概览；人工审查后用 `clawbridge_record_review` 记录 `reviewed` 或 `changes_requested`。在合并前调用 `clawbridge_check_review_head`；若 worktree HEAD 已变化，记录的审查会变为 `pending`，必须重新审查。
 
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。

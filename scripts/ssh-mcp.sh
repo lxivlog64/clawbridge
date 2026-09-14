@@ -63,7 +63,11 @@ export CODEBUDDY_GATEWAY_TOKEN="$codebuddy_gateway_token"
 
 rmdir "$lock_dir" 2>/dev/null || true
 trap - EXIT HUP INT TERM
-node "$bridge_dir/dist/src/server.js"
+if [ "${CLAWBRIDGE_RUN_MODE:-mcp}" = "coordinator" ]; then
+  node "$bridge_dir/dist/src/cli.js" coordinator
+else
+  node "$bridge_dir/dist/src/server.js"
+fi
 node_status=$?
 
 # The forwarding master is only needed while this STDIO MCP process is alive.
