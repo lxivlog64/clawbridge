@@ -107,8 +107,8 @@ async function main(): Promise<void> {
   status             Check whether the PC local assistant is online
   send <message>     Send a plain-text instruction
   history            Read the 20 most recent messages
-  projects           List registered ClawBridge projects
-  tasks              List the 20 most recent durable ClawBridge tasks
+  projects           List registered Luban projects
+  tasks              List the 20 most recent durable Luban tasks
   coordinator [--once]  Refresh remote task states and write local events
   cloud-server       Start the authenticated cloud control API
   cloud-worker [--once]  Claim and execute private Worker tasks from cloud control`);

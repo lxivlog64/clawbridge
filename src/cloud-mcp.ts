@@ -10,7 +10,7 @@ if (!config.cloudControlUrl || !config.cloudApiToken) {
   throw new Error("CLAWBRIDGE_CLOUD_CONTROL_URL and CLAWBRIDGE_CLOUD_API_TOKEN are required for cloud MCP.");
 }
 const client = new CloudControlClient(config.cloudControlUrl, config.cloudApiToken);
-const server = new McpServer({ name: "clawbridge-cloud", version: "0.1.0" });
+const server = new McpServer({ name: "luban-cloud", version: "0.1.0" });
 
 function json(value: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] }; }
 

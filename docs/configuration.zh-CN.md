@@ -1,4 +1,4 @@
-# ClawBridge 完整配置
+# 鲁班完整配置
 
 ## 配置变量
 
@@ -74,9 +74,9 @@
 
 M3 已提供 `clawbridge_verify_delivery` 和 `clawbridge_create_draft_pr`。在任务刷新为 `succeeded` 后，必须先提供 CodeBuddy worktree 的实际路径进行核验；该路径必须处于项目登记的 `allowedRoots` 内，且分支不能是默认分支。核验会读取 Git HEAD 和分支名。
 
-草稿 PR 使用执行节点上的 `gh` CLI 已有登录态。请为执行节点配置仅限目标仓库写入权限的 GitHub 身份。ClawBridge 不会强推、合并或部署；未配置 `gh`、推送失败或 SHA 不一致都会使交付状态变为 `failed`，而非伪造 PR 地址。
+草稿 PR 使用执行节点上的 `gh` CLI 已有登录态。请为执行节点配置仅限目标仓库写入权限的 GitHub 身份。鲁班不会强推、合并或部署；未配置 `gh`、推送失败或 SHA 不一致都会使交付状态变为 `failed`，而非伪造 PR 地址。
 
-创建草稿 PR 时，ClawBridge 会以普通 Git 程序执行非强制 `git push --set-upstream <deliveryRemote> <taskBranch>`，再核验远端 SHA；不会要求模型自行推送，也不会 force push。已存在同一任务分支的 PR 会被复用，不重复创建。
+创建草稿 PR 时，鲁班会以普通 Git 程序执行非强制 `git push --set-upstream <deliveryRemote> <taskBranch>`，再核验远端 SHA；不会要求模型自行推送，也不会 force push。已存在同一任务分支的 PR 会被复用，不重复创建。
 
 ### 真实连接回归（M0）
 
@@ -114,7 +114,7 @@ export CLAWBRIDGE_COORDINATOR_POLL_MS=15000
 
 远端 Gateway 必须只监听 `127.0.0.1`。启动器不会把密码写入磁盘，但能够调用启动器的本机进程仍可能继承或观察其环境，因此 Codex 电脑和 CodeBuddy 电脑都应视为可信开发设备。
 
-## 配置多个 ClawBridge
+## 配置多个鲁班执行节点
 
 每个远端执行节点必须使用不同的 MCP 名称和本机端口。例如：
 
@@ -145,7 +145,7 @@ codex mcp get clawbridge-test
 
 在 Codex 中明确指定服务名，例如：“使用 `clawbridge-dev` 的 `codebuddy_health`”，或“把测试任务交给 `clawbridge-test`”。MCP 服务名充当工具命名空间，避免同名 CodeBuddy 工具选错节点。
 
-如果多个项目都在同一台 CodeBuddy 电脑、使用同一账号和同一个 Gateway，则不需要多个 ClawBridge。只保留一个实例，在每次任务中把 `cwd` 指向不同项目即可。
+如果多个项目都在同一台 CodeBuddy 电脑、使用同一账号和同一个 Gateway，则不需要多个鲁班执行节点。只保留一个实例，在每次任务中把 `cwd` 指向不同项目即可。
 
 ## 验证远端服务
 
@@ -176,7 +176,7 @@ git clone git@github.com:owner/project.git
 
 - `model`：使用登录后 `codebuddy --help` 列出的具体模型 ID，避免依赖动态别名。
 - `effort`：简单修改用 `low`/`medium`，复杂设计和排错用 `high`/`xhigh`。
-- `permissionMode`：后台开发默认使用 `auto`。`acceptEdits` 只自动接受文件编辑，Git、测试和目录检查等 Bash 命令仍可能等待人工批准，不适合无人值守任务。在 `default` 或 `acceptEdits` 下，ClawBridge 会检查 transcript；可执行工具调用超过 120 秒仍没有完成更新时，任务显示为 `waiting_permission` 并触发状态通知。不要使用跳过全部权限检查的模式。
+- `permissionMode`：后台开发默认使用 `auto`。`acceptEdits` 只自动接受文件编辑，Git、测试和目录检查等 Bash 命令仍可能等待人工批准，不适合无人值守任务。在 `default` 或 `acceptEdits` 下，鲁班会检查 transcript；可执行工具调用超过 120 秒仍没有完成更新时，任务显示为 `waiting_permission` 并触发状态通知。不要使用跳过全部权限检查的模式。
 - `allowedTools`：可选的会话级最小白名单，例如 `["Bash(npm test:*)", "Bash(git status:*)"]`。只为已登记项目的必要命令添加规则；不要使用泛化的 `Bash` 规则。
 - `useWorktree`：Git 仓库中保持为 `true`；仅做非 Git 连通测试时才关闭。
 - `cwd`：只指向专用开发目录，不指向用户主目录或系统目录。
@@ -206,7 +206,7 @@ npm run cli -- status
 
 ### 返回 403
 
-确认请求携带 `X-CodeBuddy-Request: 1`。ClawBridge 会自动添加该安全头。
+确认请求携带 `X-CodeBuddy-Request: 1`。鲁班会自动添加该安全头。
 
 ### 返回 401
 

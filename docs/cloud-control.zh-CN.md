@@ -1,4 +1,4 @@
-# 云端控制平面（Ubuntu VPS）
+# 鲁班云端控制平面（Ubuntu VPS）
 
 本功能把任务队列和状态协调放到 VPS；CodeBuddy、Git 仓库工作区与 GitHub 登录态仍留在私有 Linux Worker。VPS 不连接 Worker 的 `8080` 端口，Worker 主动通过 HTTPS 领取任务。
 

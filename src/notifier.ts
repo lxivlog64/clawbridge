@@ -16,7 +16,7 @@ export class WebhookNotifier {
       method: "POST",
       headers: { "content-type": serverChan ? "application/x-www-form-urlencoded" : "application/json" },
       body: serverChan
-        ? new URLSearchParams({ title: `ClawBridge：${event.summary}`, desp: `任务：${event.taskId}\n事件：${event.kind}\n时间：${event.createdAt}\n事件 ID：${event.eventId}` }).toString()
+        ? new URLSearchParams({ title: `鲁班：${event.summary}`, desp: `任务：${event.taskId}\n事件：${event.kind}\n时间：${event.createdAt}\n事件 ID：${event.eventId}` }).toString()
         : JSON.stringify({ eventId: event.eventId, taskId: event.taskId, kind: event.kind, summary: event.summary, createdAt: event.createdAt }),
       signal: AbortSignal.timeout(10_000),
     });

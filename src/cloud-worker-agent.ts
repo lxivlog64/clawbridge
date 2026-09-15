@@ -198,7 +198,7 @@ export class CloudWorkerAgent {
     if (existing.exitCode === 0 && /^https:\/\//.test(existing.stdout.trim())) return { headSha, prUrl: existing.stdout.trim() };
     const created = await this.localWorker.gh(worker, details.worktreePath, [
       "pr", "create", "--draft", "--base", project.defaultBranch, "--head", details.branch,
-      "--title", `ClawBridge task ${taskId}`, "--body", `Automated delivery for ClawBridge task ${taskId}.\n\nAwaiting Codex review.`,
+      "--title", `鲁班任务 ${taskId}`, "--body", `鲁班自动交付任务 ${taskId}。\n\n等待 Codex 审查。`,
     ]);
     const prUrl = created.stdout.trim().split(/\s+/).find((value) => /^https:\/\//.test(value));
     if (created.exitCode !== 0 || !prUrl) throw new Error(`Could not create draft PR: ${created.stderr.slice(-1_000) || "No URL returned."}`);
@@ -207,7 +207,7 @@ export class CloudWorkerAgent {
 }
 
 function developmentPrompt(task: CloudTask, baseSha: string, branch: string, maxRepairRounds: number): string {
-  return `ClawBridge task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
+  return `Luban task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
 }
 function permissionMode(profile: string | undefined): BackgroundPermissionMode {
   return profile === "default" || profile === "acceptEdits" || profile === "auto" ? profile : "auto";

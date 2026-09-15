@@ -2,7 +2,7 @@
   "name": "clawbridge",
   "version": "0.1.0",
   "private": true,
-  "description": "MCP bridge for delegating Codex development tasks to CodeBuddy Code or WorkBuddy workers.",
+  "description": "Luban: an MCP bridge for delegating Codex development tasks to CodeBuddy Code or WorkBuddy workers.",
   "license": "MIT",
   "repository": {
     "type": "git",
