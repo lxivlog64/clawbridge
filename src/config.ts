@@ -26,6 +26,8 @@ export interface BridgeConfig {
   cloudWorkerId: string;
   cloudWorkerToken: string;
   cloudWorkerPollMs: number;
+  cloudNotificationWebhookUrl?: string;
+  cloudServerChanSendKey?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
@@ -73,6 +75,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     cloudWorkerId: env.CLAWBRIDGE_CLOUD_WORKER_ID ?? "",
     cloudWorkerToken: env.CLAWBRIDGE_CLOUD_WORKER_TOKEN ?? "",
     cloudWorkerPollMs: positiveInteger(env.CLAWBRIDGE_CLOUD_WORKER_POLL_MS, 10_000, "CLAWBRIDGE_CLOUD_WORKER_POLL_MS"),
+    ...(env.CLAWBRIDGE_CLOUD_NOTIFICATION_WEBHOOK_URL ? { cloudNotificationWebhookUrl: env.CLAWBRIDGE_CLOUD_NOTIFICATION_WEBHOOK_URL } : {}),
+    ...(env.CLAWBRIDGE_CLOUD_SERVERCHAN_SENDKEY ? { cloudServerChanSendKey: env.CLAWBRIDGE_CLOUD_SERVERCHAN_SENDKEY } : {}),
     ...(env.CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL ? { notificationWebhookUrl: env.CLAWBRIDGE_NOTIFICATION_WEBHOOK_URL } : {}),
   };
 }

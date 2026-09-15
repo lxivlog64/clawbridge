@@ -11,6 +11,7 @@ import { createCloudControlServer } from "./cloud-control.js";
 import { CloudControlClient } from "./cloud-control-client.js";
 import { CloudWorkerAgent } from "./cloud-worker-agent.js";
 import { CodeBuddyClient } from "./codebuddy-client.js";
+import { flushNotifications, serverChanNotifier, WebhookNotifier } from "./notifier.js";
 
 const config = loadConfig();
 const store = new TokenStore(config.tokenFile);
@@ -63,7 +64,20 @@ async function main(): Promise<void> {
       const server = createCloudControlServer({ apiToken: config.cloudApiToken, workerTokens: config.cloudWorkerTokens, projects, tasks: cloudTasks });
       await new Promise<void>((resolve) => server.listen(config.cloudPort, config.cloudListenHost, resolve));
       console.log(JSON.stringify({ listening: `${config.cloudListenHost}:${config.cloudPort}` }));
-      const close = () => server.close(() => { cloudTasks.close(); process.exit(0); });
+      const notifier = config.cloudServerChanSendKey ? serverChanNotifier(config.cloudServerChanSendKey)
+        : config.cloudNotificationWebhookUrl ? new WebhookNotifier(config.cloudNotificationWebhookUrl) : undefined;
+      let flushing = false;
+      const flush = async () => {
+        if (!notifier || flushing) return;
+        flushing = true;
+        try { await flushNotifications(cloudTasks, notifier); } finally { flushing = false; }
+      };
+      void flush();
+      const notificationTimer = notifier ? setInterval(() => { void flush(); }, config.coordinatorPollMs) : undefined;
+      const close = () => {
+        if (notificationTimer) clearInterval(notificationTimer);
+        server.close(() => { cloudTasks.close(); process.exit(0); });
+      };
       process.once("SIGINT", close);
       process.once("SIGTERM", close);
       return;

@@ -12,6 +12,35 @@ import { ProjectRegistry } from "../src/project-registry.js";
 import { CloudWorkerAgent } from "../src/cloud-worker-agent.js";
 import type { CloudTask } from "../src/cloud-task-store.js";
 import type { RemoteCommandResult } from "../src/remote-worker.js";
+import { flushNotifications, WebhookNotifier } from "../src/notifier.js";
+
+test("cloud task events are durable, acknowledged only after delivery, and back off after a failure", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-events-"));
+  const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+  try {
+    const { task } = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "Write docs", idempotencyKey: "cloud-events-001" });
+    const queued = store.listDeliverableEvents(10);
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0]?.taskId, task.taskId);
+
+    let calls = 0;
+    const failingFetch = (async () => { calls += 1; return new Response(null, { status: 503 }); }) as typeof fetch;
+    await flushNotifications(store, new WebhookNotifier("https://notify.example/events", failingFetch));
+    assert.equal(calls, 1);
+    assert.equal(store.listDeliverableEvents(10).length, 0, "a failed event must wait for its retry time");
+
+    const storeAfterRestart = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+    store.close();
+    const next = storeAfterRestart.listDeliverableEvents(10);
+    assert.equal(next.length, 0, "retry schedule survives a process restart");
+    storeAfterRestart.acknowledgeEvent(queued[0]!.eventId);
+    assert.equal(storeAfterRestart.listDeliverableEvents(10).length, 0, "acknowledged events are not delivered twice");
+    storeAfterRestart.close();
+  } finally {
+    try { store.close(); } catch { /* already closed after restart assertion */ }
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("cloud control authenticates clients and leases a task only to its registered worker", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-control-"));
