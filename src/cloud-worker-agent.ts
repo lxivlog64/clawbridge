@@ -6,7 +6,7 @@ import type { ProjectRegistry } from "./project-registry.js";
 import { LocalWorker } from "./remote-worker.js";
 import { prepareWorktree, type GitPreparerRemote } from "./worktree-preparer.js";
 
-type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "update"> & Partial<Pick<CloudControlClient, "workerTask">>;
+type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "update"> & Partial<Pick<CloudControlClient, "workerTask" | "activeTasks">>;
 type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob"> & Partial<Pick<CodeBuddyClient, "stop">>;
 interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
@@ -35,9 +35,30 @@ export class CloudWorkerAgent {
 
   async once(): Promise<boolean> {
     await this.options.control.heartbeat(this.options.workerId, { version: "0.1.0", runtime: "node" });
+    if (await this.resumeActiveTask()) return true;
     const claimed = await this.options.control.claim(this.options.workerId);
     if (!claimed.task) return false;
     await this.execute(claimed.task);
+    return true;
+  }
+
+  private async resumeActiveTask(): Promise<boolean> {
+    if (!this.options.control.activeTasks) return false;
+    const task = (await this.options.control.activeTasks(this.options.workerId))[0];
+    if (!task) return false;
+    const details = jobDetails(task.result);
+    if (!details) {
+      await this.options.control.update(task.taskId, "unknown", {
+        ...(task.result ?? {}),
+        error: "Worker restarted before accepted CodeBuddy job coordinates were persisted; manual reconciliation is required.",
+      });
+      return true;
+    }
+    try {
+      await this.awaitCompletion(task.taskId, task.projectId, details);
+    } catch (error) {
+      await this.options.control.update(task.taskId, "unknown", { ...details, error: message(error) });
+    }
     return true;
   }
 
@@ -149,6 +170,13 @@ function permissionMode(profile: string | undefined): "default" | "acceptEdits" 
   return profile === "acceptEdits" || profile === "auto" ? profile : "default";
 }
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 2_000) : "Unknown worker error."; }
+function jobDetails(result: Record<string, unknown> | undefined): JobDetails | undefined {
+  if (!result) return undefined;
+  const { remoteJobId, worktreePath, baseSha, branch } = result;
+  return typeof remoteJobId === "string" && typeof worktreePath === "string" && typeof baseSha === "string" && typeof branch === "string"
+    ? { remoteJobId, worktreePath, baseSha, branch }
+    : undefined;
+}
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);

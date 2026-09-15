@@ -160,6 +160,10 @@ test("cloud control lists tasks, coordinates cancellation, and requires an expli
     assert.equal(requested.task.state, "cancel_requested");
     const workerView = await json(await fetch(`${origin}/v1/workers/worker-a/tasks/${active.task.taskId}`, { headers: auth(workerToken) }));
     assert.equal(workerView.task.state, "cancel_requested");
+    const activeView = await json(await fetch(`${origin}/v1/workers/worker-a/active`, { headers: auth(workerToken) }));
+    assert.equal(activeView.tasks.length, 1);
+    assert.equal(activeView.tasks[0].taskId, active.task.taskId);
+    assert.equal("spec" in activeView.tasks[0], false);
     const workerCancelled = await json(await fetch(`${origin}/v1/tasks/${active.task.taskId}/events`, { method: "POST", headers: auth(workerToken), body: JSON.stringify({ state: "cancelled", result: { cancellation: "stopped" } }) }));
     assert.equal(workerCancelled.task.state, "cancelled");
 

@@ -130,13 +130,26 @@ export class CloudTaskStore {
     return this.require(taskId);
   }
 
-  heartbeat(workerId: string, metadata?: Record<string, unknown>): CloudWorker {
+  heartbeat(workerId: string, metadata?: Record<string, unknown>, leaseMs = 90_000): CloudWorker {
     const lastSeenAt = new Date().toISOString();
     const metadataJson = metadata ? JSON.stringify(metadata) : null;
     this.db.prepare(`INSERT INTO cloud_workers (worker_id, last_seen_at, metadata_json) VALUES (?, ?, ?)
       ON CONFLICT(worker_id) DO UPDATE SET last_seen_at = excluded.last_seen_at, metadata_json = excluded.metadata_json`)
       .run(workerId, lastSeenAt, metadataJson);
+    // A restarted Worker renews the leases it already owns before attempting
+    // recovery.  Only this Worker can do so because the lease owner is part
+    // of the predicate.
+    this.db.prepare(`UPDATE cloud_tasks SET lease_expires_at = ?, updated_at = ?
+      WHERE lease_owner = ? AND state IN ('leased', 'running', 'cancel_requested')`)
+      .run(new Date(Date.now() + leaseMs).toISOString(), lastSeenAt, workerId);
     return { workerId, lastSeenAt, ...(metadata ? { metadata } : {}) };
+  }
+
+  activeForWorker(workerId: string): CloudTask[] {
+    const rows = this.db.prepare(`SELECT * FROM cloud_tasks
+      WHERE worker_id = ? AND lease_owner = ? AND state IN ('leased', 'running', 'cancel_requested')
+      ORDER BY created_at ASC`).all(workerId, workerId) as TaskRow[];
+    return rows.map(taskFromRow);
   }
 
   claim(workerId: string, leaseMs: number): CloudTask | undefined {
@@ -144,13 +157,13 @@ export class CloudTaskStore {
       const now = new Date();
       const nowIso = now.toISOString();
       const candidate = this.db.prepare(`SELECT * FROM cloud_tasks
-        WHERE worker_id = ? AND (state = 'queued' OR (state IN ('leased', 'running') AND lease_expires_at < ?))
-        ORDER BY created_at ASC LIMIT 1`).get(workerId, nowIso) as TaskRow | undefined;
+        WHERE worker_id = ? AND state = 'queued'
+        ORDER BY created_at ASC LIMIT 1`).get(workerId) as TaskRow | undefined;
       if (!candidate) return undefined;
       const leaseExpiresAt = new Date(now.getTime() + leaseMs).toISOString();
       const updated = this.db.prepare(`UPDATE cloud_tasks SET state = 'leased', lease_owner = ?, lease_expires_at = ?, updated_at = ?
-        WHERE task_id = ? AND (state = 'queued' OR (state IN ('leased', 'running') AND lease_expires_at < ?))`)
-        .run(workerId, leaseExpiresAt, nowIso, candidate.task_id, nowIso);
+        WHERE task_id = ? AND state = 'queued'`)
+        .run(workerId, leaseExpiresAt, nowIso, candidate.task_id);
       if (updated.changes !== 1) return undefined;
       return this.get(candidate.task_id);
     });

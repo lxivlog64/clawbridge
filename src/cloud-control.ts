@@ -40,6 +40,7 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
       const reconcileMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/reconcile$/i.exec(url.pathname);
       const workerMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/(heartbeat|claim)$/.exec(url.pathname);
       const workerTaskMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/tasks\/([0-9a-f-]{36})$/i.exec(url.pathname);
+      const workerActiveMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/active$/.exec(url.pathname);
 
       if (client && request.method === "POST") {
         requireToken(request, options.apiToken);
@@ -85,7 +86,7 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         requireWorker(request, workerId!, options.workerTokens);
         if (action === "heartbeat") {
           const input = heartbeatInput.parse(await body(request));
-          return send(response, 200, { worker: options.tasks.heartbeat(workerId!, input.metadata) });
+          return send(response, 200, { worker: options.tasks.heartbeat(workerId!, input.metadata, leaseMs) });
         }
         if (action === "claim") {
           const task = options.tasks.claim(workerId!, leaseMs);
@@ -98,6 +99,11 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         const task = options.tasks.get(taskId!);
         if (!task || task.workerId !== workerId) return send(response, 404, { error: "Task not found." });
         return send(response, 200, { task: publicTask(task) });
+      }
+      if (workerActiveMatch && request.method === "GET") {
+        const workerId = workerActiveMatch[1]!;
+        requireWorker(request, workerId, options.workerTokens);
+        return send(response, 200, { tasks: options.tasks.activeForWorker(workerId).map((task) => publicTask(task)) });
       }
       return send(response, 404, { error: "Not found." });
     } catch (error) {
