@@ -257,8 +257,9 @@ export class CloudTaskStore implements NotificationOutbox {
     const task = this.require(taskId);
     const review = task.review;
     if (!review || review.reviewedHeadSha === observedHeadSha) return task;
-    this.db.prepare("UPDATE cloud_task_reviews SET stale_at = ?, observed_head_sha = ? WHERE task_id = ? AND stale_at IS NULL")
-      .run(new Date().toISOString(), observedHeadSha, taskId);
+    const changed = this.db.prepare("UPDATE cloud_task_reviews SET stale_at = ?, observed_head_sha = ? WHERE task_id = ? AND stale_at IS NULL")
+      .run(new Date().toISOString(), observedHeadSha, taskId).changes;
+    if (changed !== 1) return this.require(taskId);
     const updated = this.require(taskId);
     this.emit(updated, "task.review_stale", "PR 有新提交，需重新审查");
     return updated;
