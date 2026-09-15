@@ -66,7 +66,8 @@ export class CloudWorkerAgent {
 
   async run(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
-      try { await this.once(signal); } catch { /* The next poll performs a fresh authenticated heartbeat. */ }
+      try { await this.once(signal); }
+      catch (error) { console.error(JSON.stringify({ event: "worker.poll_failed", error: message(error), at: new Date().toISOString() })); }
       await wait(this.pollMs, signal);
     }
   }

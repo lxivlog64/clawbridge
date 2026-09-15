@@ -163,13 +163,14 @@ test("cloud control authenticates clients and leases a task only to its register
     assert.equal(claimed.task.spec, "Add a health endpoint");
 
     const updated = await json(await fetch(`${origin}/v1/tasks/${created.task.taskId}/events`, {
-      method: "POST", headers: auth("worker-token-which-is-long-enough"), body: JSON.stringify({ state: "succeeded", result: { commitSha: "a".repeat(40) } }),
+      method: "POST", headers: auth("worker-token-which-is-long-enough"), body: JSON.stringify({ state: "succeeded", result: { commitSha: "a".repeat(40), worktreePath: "/srv/projects/private-path" } }),
     }));
     assert.equal(updated.task.state, "succeeded");
 
     const status = await json(await fetch(`${origin}/v1/tasks/${created.task.taskId}`, { headers: auth("client-token-which-is-long-enough") }));
     assert.equal(status.task.state, "succeeded");
     assert.equal(status.task.result.commitSha, "a".repeat(40));
+    assert.equal("worktreePath" in status.task.result, false);
     assert.equal("spec" in status.task, false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
