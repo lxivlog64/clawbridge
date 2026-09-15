@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 state_db="${1:-/var/lib/clawbridge/cloud.sqlite}"
 backup_dir="${2:-/var/backups/clawbridge}"

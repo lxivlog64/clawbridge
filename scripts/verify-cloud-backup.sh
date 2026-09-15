@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 backup_file="${1:?Usage: verify-cloud-backup.sh /path/to/cloud-YYYY.sqlite}"
 [[ -f "$backup_file" ]] || { echo "Backup not found: $backup_file" >&2; exit 1; }
