@@ -51,6 +51,10 @@ test("cloud claims enforce the configured per-project concurrency limit", async 
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, first.taskId);
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 }), undefined, "second task must remain queued while the project is active");
     store.updateFromWorker(first.taskId, "worker-a", "succeeded");
+    const completed = store.get(first.taskId)!;
+    assert.equal(completed.leaseOwner, undefined);
+    assert.equal(completed.leaseExpiresAt, undefined);
+    assert.throws(() => store.updateFromWorker(first.taskId, "worker-a", "running"), /does not own|cannot change/i);
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, second.taskId);
   } finally {
     store.close();
