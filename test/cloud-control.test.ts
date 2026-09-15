@@ -58,6 +58,50 @@ test("cloud claims enforce the configured per-project concurrency limit", async 
   }
 });
 
+test("two Workers run separate projects concurrently and one token can be revoked independently", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-workers-"));
+  const registryFile = path.join(directory, "projects.json");
+  await fs.writeFile(registryFile, JSON.stringify({ schemaVersion: 1,
+    workers: [
+      { id: "worker-a", sshHost: "unused", codebuddyExecutable: "codebuddy", allowedRoots: ["/srv/a"] },
+      { id: "worker-b", sshHost: "unused", codebuddyExecutable: "codebuddy", allowedRoots: ["/srv/b"] },
+    ],
+    projects: [
+      { id: "project-a", repository: "owner/a", defaultBranch: "main", workerId: "worker-a", remoteRepositoryPath: "/srv/a/repo" },
+      { id: "project-b", repository: "owner/b", defaultBranch: "main", workerId: "worker-b", remoteRepositoryPath: "/srv/b/repo" },
+    ],
+  }));
+  const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+  const clientToken = "client-token-which-is-long-enough";
+  const tokens = { "worker-a": "worker-a-token-which-is-long-enough", "worker-b": "worker-b-token-which-is-long-enough" };
+  let server = createCloudControlServer({ apiToken: clientToken, workerTokens: tokens, projects: ProjectRegistry.load(registryFile), tasks: store });
+  let origin = await listen(server);
+  try {
+    for (const projectId of ["project-a", "project-b"]) {
+      const response = await fetch(`${origin}/v1/tasks`, { method: "POST", headers: auth(clientToken), body: JSON.stringify({ projectId, spec: "isolated test", idempotencyKey: `multi-worker-${projectId}` }) });
+      assert.equal(response.status, 201);
+    }
+    const a = await json(await fetch(`${origin}/v1/workers/worker-a/claim`, { method: "POST", headers: auth(tokens["worker-a"]!), body: "{}" }));
+    const b = await json(await fetch(`${origin}/v1/workers/worker-b/claim`, { method: "POST", headers: auth(tokens["worker-b"]!), body: "{}" }));
+    assert.equal(a.task.projectId, "project-a");
+    assert.equal(b.task.projectId, "project-b");
+    const crossWorker = await fetch(`${origin}/v1/workers/worker-b/claim`, { method: "POST", headers: auth(tokens["worker-a"]!), body: "{}" });
+    assert.equal(crossWorker.status, 401);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createCloudControlServer({ apiToken: clientToken, workerTokens: { "worker-b": tokens["worker-b"]! }, projects: ProjectRegistry.load(registryFile), tasks: store });
+    origin = await listen(server);
+    const revoked = await fetch(`${origin}/v1/workers/worker-a/heartbeat`, { method: "POST", headers: auth(tokens["worker-a"]!), body: "{}" });
+    const stillActive = await fetch(`${origin}/v1/workers/worker-b/heartbeat`, { method: "POST", headers: auth(tokens["worker-b"]!), body: "{}" });
+    assert.equal(revoked.status, 401);
+    assert.equal(stillActive.status, 200);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("cloud control authenticates clients and leases a task only to its registered worker", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-control-"));
   const registryFile = path.join(directory, "projects.json");

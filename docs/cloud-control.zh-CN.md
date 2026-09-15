@@ -102,6 +102,10 @@ npm run cli -- cloud-worker
 
 Worker 只需能出站访问 VPS 的 HTTPS 地址；无需公网 IP、入站端口或 VPS SSH 登录。每台 Worker 使用不同的 ID 和 Token。撤销某个 Worker 时，从 VPS 的 `CLAWBRIDGE_CLOUD_WORKER_TOKENS_JSON` 删除该项并重启云端服务。
 
+## 多 Worker 隔离
+
+每个项目固定登记一个 `workerId`。领取、活动任务读取和状态回传都会校验该 Worker 的独立 Token，因此 Worker A 不能领取或更新 Worker B 的任务。多个项目可由不同 Worker 并行执行；撤销某一台 Worker 时只删除它对应的 Token 并重启 VPS 服务，其他 Worker 的 Token 和任务不受影响。实际接入第二台 Worker 前，先为它创建新的 ID、随机 Token、独立项目路径与 CodeBuddy 登录态，绝不复制第一台的 Gateway 密码或 Token。
+
 ## API 摘要
 
 Mac 客户端 Token：
