@@ -349,7 +349,7 @@ server.tool(
 
 server.tool(
   "codebuddy_start_development",
-  "Start a background coding job through CodeBuddy Code. Supports an explicit model and reasoning effort. The target working directory is on the CodeBuddy machine. Use a worktree when possible and never request bypassPermissions.",
+  "Start a background coding job through CodeBuddy Code. Supports an explicit model and reasoning effort. The target working directory is on the CodeBuddy machine. Unattended jobs default to auto mode in an isolated worktree; never request bypassPermissions.",
   {
     cwd: z.string().min(1),
     prompt: z.string().min(1),
@@ -357,7 +357,7 @@ server.tool(
     effort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
     permissionMode: z
       .enum(["default", "acceptEdits", "plan", "auto", "dontAsk"])
-      .default("default"),
+      .default("auto"),
     agent: z.string().min(1).optional(),
     name: z.string().min(1).optional(),
     useWorktree: z.boolean().default(true),
@@ -486,8 +486,8 @@ const transport = new StdioServerTransport();
 await server.connect(transport);
 
 function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" {
-  if (profile === "acceptEdits" || profile === "auto") return profile;
-  return "default";
+  if (profile === "default" || profile === "acceptEdits" || profile === "auto") return profile;
+  return "auto";
 }
 
 function requireRemoteTask(taskId: string) {

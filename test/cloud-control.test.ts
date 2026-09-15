@@ -80,6 +80,27 @@ test("cloud claims enforce the configured per-project concurrency limit", async 
   }
 });
 
+test("permission waits retain their lease, can resume, and can be cancelled", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-permission-state-"));
+  const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+  try {
+    const first = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "First", idempotencyKey: "permission-state-first" }).task;
+    store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "Second", idempotencyKey: "permission-state-second" });
+    store.claim("worker-a", 60_000, { sample: 1 });
+    const waiting = store.updateFromWorker(first.taskId, "worker-a", "waiting_permission", { blockReason: "approval required" });
+    assert.equal(waiting.state, "waiting_permission");
+    assert.equal(waiting.leaseOwner, "worker-a");
+    assert.equal(store.claim("worker-a", 60_000, { sample: 1 }), undefined);
+    assert.equal(store.updateFromWorker(first.taskId, "worker-a", "running").state, "running");
+    assert.equal(store.updateFromWorker(first.taskId, "worker-a", "waiting_input").state, "waiting_input");
+    assert.equal(store.requestCancellation(first.taskId).state, "cancel_requested");
+    assert.equal(store.updateFromWorker(first.taskId, "worker-a", "cancelled").state, "cancelled");
+  } finally {
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("two Workers run separate projects concurrently and one token can be revoked independently", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-workers-"));
   const registryFile = path.join(directory, "projects.json");

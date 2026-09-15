@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CloudWorkerAgent } from "../src/cloud-worker-agent.js";
+import { CloudWorkerAgent, hasAgedPendingExecutable } from "../src/cloud-worker-agent.js";
 import type { CloudTask, CloudTaskState } from "../src/cloud-task-store.js";
 import { ProjectRegistry } from "../src/project-registry.js";
 import type { RemoteCommandResult } from "../src/remote-worker.js";
@@ -21,12 +21,57 @@ function command(stdout = "", stderr = "", exitCode = 0): RemoteCommandResult {
   return { stdout, stderr, exitCode };
 }
 
-async function writeRegistry(directory: string): Promise<string> {
+test("aged executable calls without a completion update indicate a permission wait", () => {
+  const timestamp = new Date(Date.now() - 180_000).toISOString();
+  assert.equal(hasAgedPendingExecutable({ updates: [
+    { sessionUpdate: "tool_call", toolCallId: "call-1", status: "pending", kind: "execute", _meta: { timestamp } },
+  ] }, Date.now(), 120_000), true);
+  assert.equal(hasAgedPendingExecutable({ updates: [
+    { sessionUpdate: "tool_call", toolCallId: "call-1", status: "pending", kind: "execute", _meta: { timestamp } },
+    { sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "completed" },
+  ] }, Date.now(), 120_000), false);
+  assert.equal(hasAgedPendingExecutable({ updates: [
+    { sessionUpdate: "tool_call", toolCallId: "call-2", status: "pending", kind: "read", _meta: { timestamp } },
+  ] }, Date.now(), 120_000), false);
+});
+
+test("cloud Worker reports waiting_permission and resumes after the tool is approved", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-permission-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let reads = 0;
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() { reads += 1; return reads === 1 ? { id: "job-1", state: "working", alive: true } : { id: "job-1", state: "done", settled: true }; },
+    async transcript() { return { updates: [
+      { sessionUpdate: "tool_call", toolCallId: "call-1", status: "pending", kind: "execute", _meta: { timestamp: new Date(Date.now() - 1_000).toISOString() } },
+    ] }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory, "acceptEdits")),
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1, permissionPendingMs: 0,
+    });
+    assert.equal(await agent.once(), true);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "waiting_permission", "succeeded"]);
+    assert.match(String(updates[1]?.result?.blockReason), /waiting for permission/i);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+async function writeRegistry(directory: string, permissionProfile?: "default" | "acceptEdits" | "auto"): Promise<string> {
   const registryFile = path.join(directory, "projects.json");
   await fs.writeFile(registryFile, JSON.stringify({
     schemaVersion: 1,
     workers: [{ id: "worker-a", sshHost: "local", codebuddyExecutable: "codebuddy", allowedRoots: ["/srv/projects"] }],
-    projects: [{ id: "sample", repository: "owner/sample", defaultBranch: "main", workerId: "worker-a", remoteRepositoryPath: "/srv/projects/sample" }],
+    projects: [{ id: "sample", repository: "owner/sample", defaultBranch: "main", workerId: "worker-a", remoteRepositoryPath: "/srv/projects/sample", ...(permissionProfile ? { permissionProfile } : {}) }],
   }));
   return registryFile;
 }
