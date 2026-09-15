@@ -118,7 +118,7 @@ sudo systemctl enable --now clawbridge-cloud-backup.timer
 
 恢复演练应在维护窗口完成：停止云端服务，将当前数据库改名保留，复制选定备份到 `/var/lib/clawbridge/cloud.sqlite`，以 `clawbridge` 用户权限运行 `scripts/verify-cloud-backup.sh`，然后启动服务并访问 `/health`。不要在未验证备份前覆盖当前数据库。
 
-日常健康检查应同时验证：`systemctl is-active clawbridge-cloud.service`、回环 `/health` 返回 `{"ok":true}`、备份 timer 最近一次执行成功，以及通知 outbox 没有持续积压。告警应发送到与 Server酱不同的运维渠道；连续失败、备份超过 26 小时未生成或 `/health` 不可用时，先暂停新任务并保留数据库与日志供排查。
+日常健康检查应同时验证：`systemctl is-active clawbridge-cloud.service`、回环 `/health` 返回 `{"ok":true}`、备份 timer 最近一次执行成功，以及通知 outbox 没有持续积压。`/health` 会执行 SQLite 快速完整性检查；使用 Mac 客户端 Token 请求 `/ready` 可查看通知积压数量和 Worker 最近心跳。告警应发送到与 Server酱不同的运维渠道；连续失败、备份超过 26 小时未生成或 `/health` 不可用时，先暂停新任务并保留数据库与日志供排查。
 
 ## API 摘要
 

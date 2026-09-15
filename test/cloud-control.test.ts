@@ -139,6 +139,14 @@ test("cloud control authenticates clients and leases a task only to its register
   });
   const origin = await listen(server);
   try {
+    const health = await json(await fetch(`${origin}/health`));
+    assert.equal(health.ok, true);
+    const readyDenied = await fetch(`${origin}/ready`);
+    assert.equal(readyDenied.status, 401);
+    const ready = await json(await fetch(`${origin}/ready`, { headers: auth("client-token-which-is-long-enough") }));
+    assert.equal(ready.database, "ok");
+    assert.equal(typeof ready.pendingNotifications, "number");
+
     const denied = await fetch(`${origin}/v1/tasks`, { method: "POST" });
     assert.equal(denied.status, 401);
 

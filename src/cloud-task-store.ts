@@ -115,6 +115,20 @@ export class CloudTaskStore implements NotificationOutbox {
     return rows.map((row) => this.withReview(taskFromRow(row)));
   }
 
+  healthCheck(): boolean {
+    return this.db.pragma("quick_check", { simple: true }) === "ok";
+  }
+
+  diagnostics(): { database: "ok" | "error"; pendingNotifications: number; oldestPendingNotification?: string; workers: CloudWorker[] } {
+    const pending = this.db.prepare("SELECT COUNT(*) AS count, MIN(created_at) AS oldest FROM cloud_task_events WHERE delivered_at IS NULL")
+      .get() as { count: number; oldest: string | null };
+    const workers = (this.db.prepare("SELECT * FROM cloud_workers ORDER BY worker_id").all() as WorkerRow[]).map((row) => ({
+      workerId: row.worker_id, lastSeenAt: row.last_seen_at,
+      ...(row.metadata_json ? { metadata: JSON.parse(row.metadata_json) as Record<string, unknown> } : {}),
+    }));
+    return { database: this.healthCheck() ? "ok" : "error", pendingNotifications: pending.count, ...(pending.oldest ? { oldestPendingNotification: pending.oldest } : {}), workers };
+  }
+
   requestCancellation(taskId: string): CloudTask {
     return this.db.transaction(() => {
     const current = this.require(taskId);
