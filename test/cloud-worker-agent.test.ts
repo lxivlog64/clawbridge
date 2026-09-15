@@ -109,8 +109,9 @@ test("post-dispatch polling error reports unknown with job coordinates", async (
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-polling-"));
   const task = leasedTask();
   const updates: RecordedUpdate[] = [];
+  let prompt = "";
   const codeBuddy = {
-    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async dispatchJob(input: { prompt: string }) { prompt = input.prompt; return { id: "job-1", state: "working" }; },
     async getJob() { throw new Error("CodeBuddy gateway is unreachable."); },
   };
   try {
@@ -126,6 +127,29 @@ test("post-dispatch polling error reports unknown with job coordinates", async (
     assert.equal(result?.baseSha, BASE_SHA);
     assert.equal(result?.branch, BRANCH);
     assert.match(String(result?.error), /unreachable/i);
+    assert.match(prompt, /at most 1 repair round/i);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("an expired runtime limit stops CodeBuddy and reports a terminal failure", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-timeout-"));
+  const task = { ...leasedTask(), state: "running" as const, result: { remoteJobId: "job-1", worktreePath: WORKTREE, baseSha: BASE_SHA, branch: BRANCH, deadlineAt: new Date(Date.now() - 1_000).toISOString() } };
+  const updates: RecordedUpdate[] = [];
+  let stopped: string | undefined;
+  const control = { ...controlFor(task, updates), async activeTasks() { return [task]; } };
+  const codeBuddy = {
+    async dispatchJob() { throw new Error("must resume instead of dispatching"); },
+    async getJob() { throw new Error("expired job must be stopped before status polling"); },
+    async stop(id: string) { stopped = id; return {}; },
+  };
+  try {
+    const agent = new CloudWorkerAgent({ workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)), control, codeBuddy, localWorker: healthyGit(), pollMs: 1 });
+    assert.equal(await agent.once(), true);
+    assert.equal(stopped, "job-1");
+    assert.equal(updates.at(-1)?.state, "failed");
+    assert.match(String(updates.at(-1)?.result?.error), /runtime limit/i);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

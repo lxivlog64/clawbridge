@@ -54,7 +54,7 @@ const registrySchema = z.object({
 
 export type RegisteredProject = z.infer<typeof projectSchema>;
 export type RegisteredWorker = z.infer<typeof workerSchema>;
-export type ProjectSummary = Pick<RegisteredProject, "id" | "repository" | "defaultBranch" | "workerId" | "requiredCapabilities" | "defaultModel" | "maxRuntimeMinutes">;
+export type ProjectSummary = Pick<RegisteredProject, "id" | "repository" | "defaultBranch" | "workerId" | "requiredCapabilities" | "defaultModel" | "maxRuntimeMinutes" | "maxRepairRounds" | "maxConcurrentJobs">;
 
 export class ProjectRegistry {
   private constructor(
@@ -83,9 +83,13 @@ export class ProjectRegistry {
   }
 
   list(): ProjectSummary[] {
-    return [...this.projects.values()].map(({ id, repository, defaultBranch, workerId, requiredCapabilities, defaultModel, maxRuntimeMinutes }) =>
-      ({ id, repository, defaultBranch, workerId, requiredCapabilities, defaultModel, maxRuntimeMinutes }),
+    return [...this.projects.values()].map(({ id, repository, defaultBranch, workerId, requiredCapabilities, defaultModel, maxRuntimeMinutes, maxRepairRounds, maxConcurrentJobs }) =>
+      ({ id, repository, defaultBranch, workerId, requiredCapabilities, defaultModel, maxRuntimeMinutes, maxRepairRounds, maxConcurrentJobs }),
     );
+  }
+
+  concurrencyLimits(): Record<string, number> {
+    return Object.fromEntries([...this.projects.values()].map((project) => [project.id, project.maxConcurrentJobs]));
   }
 
   get(projectId: string): RegisteredProject | undefined {
