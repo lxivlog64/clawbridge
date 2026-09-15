@@ -264,7 +264,7 @@ GitHub 身份可采用专用机器账号或 GitHub App；不要给执行节点�
 - M3：已实现并真实验证。任务仅在隔离 worktree 提交，ClawBridge 校验 SHA 并非强制推送任务分支，创建草稿 PR 后由 Codex 对固定 SHA 审查。
 - M4：代码已实现 SQLite outbox、协调器、Webhook 重试和用户服务安装脚本；真实“退出 Codex、重启 Mac/VPS 后恢复、Webhook 失败重试”验收仍待部署环境完成。
 - M5：已实现精简结果、固定 SHA 审查上下文、审查记录与 HEAD 失效检查；真实 M3 草稿 PR 已完成一次 Codex 审查。用量指标与自动修复轮次执行仍待增强。
-- M6：已实现实验性 VPS 控制 API、Token 鉴权、Worker 心跳/租约领取/状态回传、本地 Worker 执行器及 Mac 云端 MCP 提交/查询入口；等待 Ubuntu VPS 部署、TLS 反向代理与端到端验收。
+- M6：已实现实验性 VPS 控制 API、Token 鉴权、Worker 心跳/租约领取/状态回传、本地 Worker 执行器及 Mac 云端 MCP 提交/查询入口；Worker 执行器区分派发边界：远端 jobId 产生前的预检/worktree/派发失败仍记 `failed`，jobId 被接受后轮询、交付校验、推送或创建 PR 的异常记 `unknown` 并保留 remoteJobId、worktreePath、baseSha、branch 与简短错误，不自动重试或重派。Ubuntu VPS、TLS 反向代理、私有 Worker 出站领取，以及一次自动创建草稿 PR 的端到端路径均已真实验收。
 
 ## 14. 验收场景
 
