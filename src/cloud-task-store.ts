@@ -163,13 +163,19 @@ export class CloudTaskStore implements NotificationOutbox {
     return rows.map(taskFromRow);
   }
 
-  claim(workerId: string, leaseMs: number): CloudTask | undefined {
+  claim(workerId: string, leaseMs: number, projectConcurrency: Record<string, number> = {}): CloudTask | undefined {
     const transaction = this.db.transaction(() => {
       const now = new Date();
       const nowIso = now.toISOString();
-      const candidate = this.db.prepare(`SELECT * FROM cloud_tasks
+      const candidates = this.db.prepare(`SELECT * FROM cloud_tasks
         WHERE worker_id = ? AND state = 'queued'
-        ORDER BY created_at ASC LIMIT 1`).get(workerId) as TaskRow | undefined;
+        ORDER BY created_at ASC LIMIT 100`).all(workerId) as TaskRow[];
+      const candidate = candidates.find((item) => {
+        const limit = projectConcurrency[item.project_id] ?? 1;
+        const active = this.db.prepare(`SELECT COUNT(*) AS count FROM cloud_tasks
+          WHERE project_id = ? AND state IN ('leased', 'running', 'cancel_requested')`).get(item.project_id) as { count: number };
+        return active.count < limit;
+      });
       if (!candidate) return undefined;
       const leaseExpiresAt = new Date(now.getTime() + leaseMs).toISOString();
       const updated = this.db.prepare(`UPDATE cloud_tasks SET state = 'leased', lease_owner = ?, lease_expires_at = ?, updated_at = ?

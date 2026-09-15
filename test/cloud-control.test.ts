@@ -42,6 +42,22 @@ test("cloud task events are durable, acknowledged only after delivery, and back 
   }
 });
 
+test("cloud claims enforce the configured per-project concurrency limit", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-limits-"));
+  const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+  try {
+    const first = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "First", idempotencyKey: "cloud-limit-first" }).task;
+    const second = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "Second", idempotencyKey: "cloud-limit-second" }).task;
+    assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, first.taskId);
+    assert.equal(store.claim("worker-a", 60_000, { sample: 1 }), undefined, "second task must remain queued while the project is active");
+    store.updateFromWorker(first.taskId, "worker-a", "succeeded");
+    assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, second.taskId);
+  } finally {
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("cloud control authenticates clients and leases a task only to its registered worker", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-control-"));
   const registryFile = path.join(directory, "projects.json");

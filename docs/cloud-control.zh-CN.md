@@ -15,6 +15,12 @@ Codex on Mac → HTTPS control API on VPS ← outbound HTTPS polling ← Linux W
 
 任务租约默认 90 秒。Worker 在运行期间回传状态并续租；Worker 离线时，租约会过期，后续版本会提供更严格的恢复与人工接管流程。未知状态不会自动重派。
 
+## 运行限制
+
+每个项目登记项可设置 `maxRuntimeMinutes`、`maxConcurrentJobs` 与 `maxRepairRounds`，默认分别为 120 分钟、1 个并行任务和 1 轮修复。云端领取任务时会原子地检查项目并发上限；运行超时会向 CodeBuddy 请求停止，并把任务记为失败。修复轮次会写入开发指令，要求模型超过限制时报告阻塞原因而不是继续消耗积分。
+
+这些限制以项目登记文件为准；修改 `/etc/clawbridge/projects.json` 后需要重启 VPS 服务，并同步更新相关 Worker 的项目登记文件。
+
 ## VPS 安装
 
 在 Ubuntu VPS 上创建专用非 root 用户，克隆仓库并安装 Node.js 20+。不要把 Worker 的 CodeBuddy 密码、GitHub 凭据或 SSH 私钥复制到 VPS。

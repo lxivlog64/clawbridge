@@ -12,7 +12,7 @@ interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
 }
 /** Persisted coordinates of an accepted remote job, retained even when its final outcome is unknown. */
-type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string };
+type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string; deadlineAt?: string };
 
 export interface CloudWorkerAgentOptions {
   workerId: string;
@@ -95,7 +95,7 @@ export class CloudWorkerAgent {
       }
       const job = await this.options.codeBuddy.dispatchJob({
         cwd: prepared.worktreePath,
-        prompt: developmentPrompt(task, prepared.baseSha, prepared.branch),
+        prompt: developmentPrompt(task, prepared.baseSha, prepared.branch, project.maxRepairRounds),
         model: task.requestedModel,
         permissionMode: permissionMode(project.permissionProfile),
         allowedTools: project.allowedTools,
@@ -103,7 +103,10 @@ export class CloudWorkerAgent {
         bgIsolation: "none",
       });
       if (!job.id) throw new Error("CodeBuddy gateway returned no job id.");
-      accepted = { remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch };
+      accepted = {
+        remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch,
+        deadlineAt: new Date(Date.now() + project.maxRuntimeMinutes * 60_000).toISOString(),
+      };
       await this.options.control.update(task.taskId, "running", accepted);
       await this.awaitCompletion(task.taskId, task.projectId, accepted, signal);
     } catch (error) {
@@ -125,6 +128,12 @@ export class CloudWorkerAgent {
         if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job cancellation.");
         await this.options.codeBuddy.stop(details.remoteJobId);
         await this.options.control.update(taskId, "cancelled", { ...details, cancellation: "CodeBuddy stop requested by client" });
+        return;
+      }
+      if (details.deadlineAt && Date.parse(details.deadlineAt) <= Date.now()) {
+        if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job timeout cancellation.");
+        await this.options.codeBuddy.stop(details.remoteJobId);
+        await this.options.control.update(taskId, "failed", { ...details, error: "Task exceeded its configured runtime limit." });
         return;
       }
       const job = await this.options.codeBuddy.getJob(details.remoteJobId);
@@ -174,8 +183,8 @@ export class CloudWorkerAgent {
   }
 }
 
-function developmentPrompt(task: CloudTask, baseSha: string, branch: string): string {
-  return `ClawBridge task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Commit the completed work and report exact test commands and commit SHA.`;
+function developmentPrompt(task: CloudTask, baseSha: string, branch: string, maxRepairRounds: number): string {
+  return `ClawBridge task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
 }
 function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" {
   return profile === "acceptEdits" || profile === "auto" ? profile : "default";
@@ -183,9 +192,9 @@ function permissionMode(profile: string | undefined): "default" | "acceptEdits" 
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 2_000) : "Unknown worker error."; }
 function jobDetails(result: Record<string, unknown> | undefined): JobDetails | undefined {
   if (!result) return undefined;
-  const { remoteJobId, worktreePath, baseSha, branch } = result;
+  const { remoteJobId, worktreePath, baseSha, branch, deadlineAt } = result;
   return typeof remoteJobId === "string" && typeof worktreePath === "string" && typeof baseSha === "string" && typeof branch === "string"
-    ? { remoteJobId, worktreePath, baseSha, branch }
+    ? { remoteJobId, worktreePath, baseSha, branch, ...(typeof deadlineAt === "string" ? { deadlineAt } : {}) }
     : undefined;
 }
 function reconciledRetry(task: CloudTask): { priorBaseSha: string } | undefined {

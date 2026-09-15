@@ -89,7 +89,7 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
           return send(response, 200, { worker: options.tasks.heartbeat(workerId!, input.metadata, leaseMs) });
         }
         if (action === "claim") {
-          const task = options.tasks.claim(workerId!, leaseMs);
+          const task = options.tasks.claim(workerId!, leaseMs, options.projects.concurrencyLimits());
           return send(response, 200, { task: task ? publicTask(task, true) : null, leaseMs });
         }
       }
