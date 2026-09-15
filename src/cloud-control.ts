@@ -14,6 +14,7 @@ const workerUpdate = z.object({
 }).strict();
 const heartbeatInput = z.object({ metadata: z.record(z.string(), z.unknown()).optional() }).strict();
 const reconcileInput = z.object({ action: z.enum(["close", "requeue"]), remoteJobConfirmedStopped: z.literal(true) }).strict();
+const reviewInput = z.object({ conclusion: z.enum(["approved", "changes_requested"]), comment: z.string().min(1).max(10_000).optional(), reviewedHeadSha: z.string().regex(/^[0-9a-f]{40}$/i) }).strict();
 const listInput = z.object({ projectId: z.string().min(1).max(80).optional(), state: z.enum(["queued", "leased", "running", "cancel_requested", "succeeded", "failed", "cancelled", "unknown"]).optional(), limit: z.coerce.number().int().min(1).max(100).optional() });
 
 export interface CloudControlOptions {
@@ -22,6 +23,7 @@ export interface CloudControlOptions {
   projects: ProjectRegistry;
   tasks: CloudTaskStore;
   leaseMs?: number;
+  fetchFn?: typeof fetch;
 }
 
 /** HTTP control plane. Deploy behind TLS; this server deliberately does not expose a CodeBuddy gateway. */
@@ -38,6 +40,7 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
       const eventMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/events$/i.exec(url.pathname);
       const cancelMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/cancel$/i.exec(url.pathname);
       const reconcileMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/reconcile$/i.exec(url.pathname);
+      const reviewMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/review$/i.exec(url.pathname);
       const workerMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/(heartbeat|claim)$/.exec(url.pathname);
       const workerTaskMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/tasks\/([0-9a-f-]{36})$/i.exec(url.pathname);
       const workerActiveMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/active$/.exec(url.pathname);
@@ -72,6 +75,19 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         requireToken(request, options.apiToken);
         const input = reconcileInput.parse(await body(request));
         const task = options.tasks.resolveUnknown(reconcileMatch[1]!, input.action, input.remoteJobConfirmedStopped);
+        return send(response, 200, { task: publicTask(task) });
+      }
+      if (reviewMatch && request.method === "POST") {
+        requireToken(request, options.apiToken);
+        const input = reviewInput.parse(await body(request));
+        return send(response, 200, { task: publicTask(options.tasks.recordReview(reviewMatch[1]!, input)) });
+      }
+      if (reviewMatch && request.method === "GET") {
+        requireToken(request, options.apiToken);
+        let task = options.tasks.get(reviewMatch[1]!);
+        if (!task) return send(response, 404, { error: "Task not found." });
+        const remoteHead = await githubHead(task.result?.prUrl, options.fetchFn ?? fetch);
+        if (remoteHead) task = options.tasks.observeReviewHead(task.taskId, remoteHead);
         return send(response, 200, { task: publicTask(task) });
       }
       if (eventMatch && request.method === "POST") {
@@ -153,4 +169,14 @@ function send(response: ServerResponse, status: number, value: unknown): void {
   const text = JSON.stringify(value);
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(text), "cache-control": "no-store" });
   response.end(text);
+}
+async function githubHead(prUrl: unknown, fetchFn: typeof fetch): Promise<string | undefined> {
+  if (typeof prUrl !== "string") return undefined;
+  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(prUrl);
+  if (!match) return undefined;
+  try {
+    const response = await fetchFn(`https://api.github.com/repos/${encodeURIComponent(match[1]!)}/${encodeURIComponent(match[2]!)}/pulls/${match[3]}`, { headers: { accept: "application/vnd.github+json", "user-agent": "clawbridge" }, signal: AbortSignal.timeout(5_000) });
+    const body = await response.json() as { head?: { sha?: unknown } };
+    return response.ok && typeof body.head?.sha === "string" && /^[0-9a-f]{40}$/i.test(body.head.sha) ? body.head.sha : undefined;
+  } catch { return undefined; }
 }

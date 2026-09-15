@@ -25,6 +25,10 @@ Codex on Mac → HTTPS control API on VPS ← outbound HTTPS polling ← Linux W
 
 每次任务都会在其云端状态结果的 `usage` 字段记录请求模型、Gateway 实际返回的模型、从 CodeBuddy 接受任务起计算的耗时，以及 Gateway 明确返回的输入/输出 Token 和积分数。未由 Gateway 返回的字段固定为 `"unknown"`，不以模型名称、耗时或套餐推算积分。该记录只保存经过筛选的标量字段，不保存完整 Gateway 响应、提示词、凭据或思考过程。
 
+## 云端审查闭环
+
+任务交付草稿 PR 后，Codex 使用 `clawbridge_cloud_review_record` 提交 `approved` 或 `changes_requested` 结论，并必须附上审查时的 `headSha`。`clawbridge_cloud_review_status` 会查询公开 GitHub PR 的当前提交；发现 SHA 改变时，审查状态变为 `stale`，必须重新审查。私有 PR、GitHub 暂时不可达或非 GitHub 链接不会被猜测为“没有变化”，而是保持原记录且不作外部确认。
+
 ## VPS 安装
 
 在 Ubuntu VPS 上创建专用非 root 用户，克隆仓库并安装 Node.js 20+。不要把 Worker 的 CodeBuddy 密码、GitHub 凭据或 SSH 私钥复制到 VPS。

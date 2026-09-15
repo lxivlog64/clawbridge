@@ -156,7 +156,7 @@ test("cloud MCP publishes submit, status, and read-only projects tools", async (
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
       "clawbridge_cloud_cancel", "clawbridge_cloud_projects", "clawbridge_cloud_reconcile_unknown",
-      "clawbridge_cloud_status", "clawbridge_cloud_submit", "clawbridge_cloud_tasks",
+      "clawbridge_cloud_review_record", "clawbridge_cloud_review_status", "clawbridge_cloud_status", "clawbridge_cloud_submit", "clawbridge_cloud_tasks",
     ]);
 
     const result = await client.callTool({ name: "clawbridge_cloud_projects", arguments: {} });
@@ -171,6 +171,28 @@ test("cloud MCP publishes submit, status, and read-only projects tools", async (
   } finally {
     await client.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a review is bound to its delivery SHA and becomes stale when a PR head changes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-review-"));
+  const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+  const firstHead = "a".repeat(40);
+  const secondHead = "b".repeat(40);
+  try {
+    const task = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "Review me", idempotencyKey: "cloud-review-001" }).task;
+    store.claim("worker-a", 60_000);
+    store.updateFromWorker(task.taskId, "worker-a", "succeeded", { headSha: firstHead, prUrl: "https://github.com/owner/sample/pull/1" });
+    const reviewed = store.recordReview(task.taskId, { conclusion: "approved", comment: "Looks good", reviewedHeadSha: firstHead });
+    assert.equal(reviewed.review?.status, "current");
+    assert.equal(reviewed.review?.conclusion, "approved");
+    const stale = store.observeReviewHead(task.taskId, secondHead);
+    assert.equal(stale.review?.status, "stale");
+    assert.equal(stale.review?.observedHeadSha, secondHead);
+    assert.throws(() => store.recordReview(task.taskId, { conclusion: "approved", reviewedHeadSha: secondHead }), /current delivery SHA/i);
+  } finally {
     store.close();
     await fs.rm(directory, { recursive: true, force: true });
   }

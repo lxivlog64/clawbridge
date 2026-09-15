@@ -33,6 +33,15 @@ export class CloudControlClient {
     return (await this.request<{ task: CloudTask }>(`/v1/tasks/${encodeURIComponent(taskId)}/reconcile`, { method: "POST", body: JSON.stringify({ action, remoteJobConfirmedStopped: true }) })).task;
   }
 
+  async recordReview(taskId: string, input: { conclusion: "approved" | "changes_requested"; comment?: string; reviewedHeadSha: string }): Promise<CloudTask> {
+    return (await this.request<{ task: CloudTask }>(`/v1/tasks/${encodeURIComponent(taskId)}/review`, { method: "POST", body: JSON.stringify(input) })).task;
+  }
+
+  async reviewStatus(taskId: string): Promise<CloudTask | undefined> {
+    try { return (await this.request<{ task: CloudTask }>(`/v1/tasks/${encodeURIComponent(taskId)}/review`, {})).task; }
+    catch (error) { if (error instanceof CloudApiError && error.status === 404) return undefined; throw error; }
+  }
+
   async workerTask(workerId: string, taskId: string): Promise<CloudTask | undefined> {
     try { return (await this.request<{ task: CloudTask }>(`/v1/workers/${encodeURIComponent(workerId)}/tasks/${encodeURIComponent(taskId)}`, {})).task; }
     catch (error) { if (error instanceof CloudApiError && error.status === 404) return undefined; throw error; }
