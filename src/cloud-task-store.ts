@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import type { NotificationEvent, NotificationOutbox } from "./notifier.js";
 
 export type CloudTaskState = "queued" | "leased" | "running" | "cancel_requested" | "succeeded" | "failed" | "cancelled" | "unknown";
 
@@ -37,7 +38,7 @@ interface TaskRow {
 interface WorkerRow { worker_id: string; last_seen_at: string; metadata_json: string | null }
 
 /** Durable task queue for the public control plane. It deliberately stores no worker credentials. */
-export class CloudTaskStore {
+export class CloudTaskStore implements NotificationOutbox {
   private readonly db: Database.Database;
 
   constructor(databaseFile: string) {
@@ -58,6 +59,11 @@ export class CloudTaskStore {
       CREATE TABLE IF NOT EXISTS cloud_workers (
         worker_id TEXT PRIMARY KEY, last_seen_at TEXT NOT NULL, metadata_json TEXT
       );
+      CREATE TABLE IF NOT EXISTS cloud_task_events (
+        event_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, summary TEXT NOT NULL,
+        created_at TEXT NOT NULL, delivered_at TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS cloud_task_events_delivery ON cloud_task_events(delivered_at, next_attempt_at, created_at);
     `);
   }
 
@@ -81,6 +87,7 @@ export class CloudTaskStore {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(task.taskId, task.idempotencyKey, task.projectId, task.workerId, task.spec, task.specHash,
         task.requestedModel ?? null, task.state, task.createdAt, task.updatedAt);
+    this.emit(task, "task.queued", "任务已进入队列");
     return { task, reused: false };
   }
 
@@ -111,7 +118,9 @@ export class CloudTaskStore {
     } else {
       throw new CloudTaskConflictError("An unknown task must be reconciled before it can be cancelled.");
     }
-    return this.require(taskId);
+    const task = this.require(taskId);
+    if (task.state !== current.state) this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
+    return task;
   }
 
   resolveUnknown(taskId: string, action: "close" | "requeue", remoteJobConfirmedStopped: boolean): CloudTask {
@@ -127,7 +136,9 @@ export class CloudTaskStore {
       this.db.prepare("UPDATE cloud_tasks SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, result_json = ?, updated_at = ? WHERE task_id = ?")
         .run(JSON.stringify(result), now, taskId);
     }
-    return this.require(taskId);
+    const task = this.require(taskId);
+    this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
+    return task;
   }
 
   heartbeat(workerId: string, metadata?: Record<string, unknown>, leaseMs = 90_000): CloudWorker {
@@ -184,7 +195,30 @@ export class CloudTaskStore {
     const leaseExpiresAt = terminal ? null : new Date(now.getTime() + leaseMs).toISOString();
     this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
       .run(nextState, result ? JSON.stringify(result) : null, leaseExpiresAt, now.toISOString(), taskId);
-    return this.get(taskId)!;
+    const task = this.get(taskId)!;
+    if (task.state !== current.state) this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
+    return task;
+  }
+
+  listDeliverableEvents(limit: number): NotificationEvent[] {
+    const now = new Date().toISOString();
+    return (this.db.prepare(`SELECT event_id, task_id, kind, summary, created_at FROM cloud_task_events
+      WHERE delivered_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+      ORDER BY created_at ASC LIMIT ?`).all(now, limit) as Array<{ event_id: string; task_id: string; kind: string; summary: string; created_at: string }>)
+      .map((event) => ({ eventId: event.event_id, taskId: event.task_id, kind: event.kind, summary: event.summary, createdAt: event.created_at }));
+  }
+
+  acknowledgeEvent(eventId: string): boolean {
+    return this.db.prepare("UPDATE cloud_task_events SET delivered_at = ? WHERE event_id = ? AND delivered_at IS NULL")
+      .run(new Date().toISOString(), eventId).changes === 1;
+  }
+
+  deferEvent(eventId: string): void {
+    const row = this.db.prepare("SELECT attempts FROM cloud_task_events WHERE event_id = ? AND delivered_at IS NULL").get(eventId) as { attempts: number } | undefined;
+    if (!row) return;
+    const delayMs = Math.min(300_000, 5_000 * 2 ** row.attempts);
+    this.db.prepare("UPDATE cloud_task_events SET attempts = ?, next_attempt_at = ? WHERE event_id = ?")
+      .run(row.attempts + 1, new Date(Date.now() + delayMs).toISOString(), eventId);
   }
 
   close(): void { this.db.close(); }
@@ -193,6 +227,11 @@ export class CloudTaskStore {
     const task = this.get(taskId);
     if (!task) throw new Error("Unknown cloud task.");
     return task;
+  }
+
+  private emit(task: CloudTask, kind: string, summary: string): void {
+    this.db.prepare("INSERT INTO cloud_task_events (event_id, task_id, kind, summary, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(crypto.randomUUID(), task.taskId, kind, summary, new Date().toISOString());
   }
 }
 

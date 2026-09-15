@@ -30,6 +30,24 @@ CLAWBRIDGE_CLOUD_API_TOKEN='生成的 Mac 客户端 Token'
 CLAWBRIDGE_CLOUD_WORKER_TOKENS_JSON='{"linux-dev":"生成的 Worker Token"}'
 ```
 
+### 微信通知（可选）
+
+可用 [Server酱](https://sct.ftqq.com/) 将云端任务的排队、运行、完成、失败、取消与未知状态推送到微信。将 SendKey **仅** 写入 VPS 的私密环境文件：
+
+```bash
+CLAWBRIDGE_CLOUD_SERVERCHAN_SENDKEY='你的 SendKey'
+```
+
+不要将 SendKey 提交到 Git、写入项目登记文件或发给 Codex。服务会把事件先写入本地 outbox；HTTP 失败时以 5 秒起始、最长 5 分钟的退避间隔重试。投递是“至少一次”语义，消息中的事件 ID 可用于接收端去重。若 SendKey 曾被贴到聊天、终端共享记录或 GitHub，请立即到 Server酱重新生成。
+
+如需对接自己的系统，也可以改用通用 JSON Webhook：
+
+```bash
+CLAWBRIDGE_CLOUD_NOTIFICATION_WEBHOOK_URL='https://notify.example/events'
+```
+
+两者同时配置时，Server酱优先。
+
 项目登记文件只保存项目 ID、目标 Worker ID 与非敏感仓库元数据；它不保存访问令牌。其 `workerId` 必须与 Worker 的 ID 一致。
 
 运行：
