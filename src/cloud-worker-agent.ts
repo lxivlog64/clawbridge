@@ -1,4 +1,4 @@
-import { CodeBuddyClient } from "./codebuddy-client.js";
+import { CodeBuddyClient, type CodeBuddyTranscript } from "./codebuddy-client.js";
 import { CloudControlClient } from "./cloud-control-client.js";
 import type { CloudTask } from "./cloud-task-store.js";
 import { mapRemoteState } from "./lifecycle.js";
@@ -7,12 +7,13 @@ import { LocalWorker } from "./remote-worker.js";
 import { prepareWorktree, type GitPreparerRemote } from "./worktree-preparer.js";
 
 type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "update"> & Partial<Pick<CloudControlClient, "workerTask" | "activeTasks">>;
-type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob"> & Partial<Pick<CodeBuddyClient, "stop">>;
+type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob"> & Partial<Pick<CodeBuddyClient, "stop" | "transcript">>;
 interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
 }
 /** Persisted coordinates of an accepted remote job, retained even when its final outcome is unknown. */
-type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string; deadlineAt?: string; dispatchedAt?: string; requestedModel?: string };
+type BackgroundPermissionMode = "default" | "acceptEdits" | "auto";
+type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string; deadlineAt?: string; dispatchedAt?: string; requestedModel?: string; permissionMode?: BackgroundPermissionMode };
 
 export interface CloudWorkerAgentOptions {
   workerId: string;
@@ -20,16 +21,19 @@ export interface CloudWorkerAgentOptions {
   control: CloudControlGateway;
   codeBuddy: CodeBuddyGateway;
   pollMs?: number;
+  permissionPendingMs?: number;
   localWorker?: LocalExecutionWorker;
 }
 
 /** Runs on the private Worker host. It never exposes CodeBuddy or GitHub credentials to the VPS. */
 export class CloudWorkerAgent {
   private readonly pollMs: number;
+  private readonly permissionPendingMs: number;
   private readonly localWorker: LocalExecutionWorker;
 
   constructor(private readonly options: CloudWorkerAgentOptions) {
     this.pollMs = options.pollMs ?? 10_000;
+    this.permissionPendingMs = options.permissionPendingMs ?? 120_000;
     this.localWorker = options.localWorker ?? new LocalWorker();
   }
 
@@ -47,7 +51,7 @@ export class CloudWorkerAgent {
     if (!this.options.control.activeTasks) return false;
     const task = (await this.options.control.activeTasks(this.options.workerId))[0];
     if (!task) return false;
-    const details = jobDetails(task.result);
+    const details = jobDetails(task.result, permissionMode(this.options.projects.require(task.projectId).permissionProfile));
     if (!details) {
       await this.options.control.update(task.taskId, "unknown", {
         ...(task.result ?? {}),
@@ -94,11 +98,12 @@ export class CloudWorkerAgent {
         await this.options.control.update(task.taskId, "cancelled", { cancellation: "cancelled before CodeBuddy dispatch" });
         return;
       }
+      const taskPermissionMode = permissionMode(project.permissionProfile);
       const job = await this.options.codeBuddy.dispatchJob({
         cwd: prepared.worktreePath,
         prompt: developmentPrompt(task, prepared.baseSha, prepared.branch, project.maxRepairRounds),
         model: task.requestedModel,
-        permissionMode: permissionMode(project.permissionProfile),
+        permissionMode: taskPermissionMode,
         allowedTools: project.allowedTools,
         name: `clawbridge-${task.taskId}`,
         bgIsolation: "none",
@@ -107,7 +112,7 @@ export class CloudWorkerAgent {
       accepted = {
         remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch,
         deadlineAt: new Date(Date.now() + project.maxRuntimeMinutes * 60_000).toISOString(),
-        dispatchedAt: new Date().toISOString(), requestedModel: task.requestedModel,
+        dispatchedAt: new Date().toISOString(), requestedModel: task.requestedModel, permissionMode: taskPermissionMode,
       };
       await this.options.control.update(task.taskId, "running", { ...accepted, usage: usageSnapshot(accepted, job) });
       await this.awaitCompletion(task.taskId, task.projectId, accepted, signal);
@@ -140,8 +145,13 @@ export class CloudWorkerAgent {
       }
       const job = await this.options.codeBuddy.getJob(details.remoteJobId);
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
-      if (state === "running") {
-        await this.options.control.update(taskId, "running", { ...details, usage: usageSnapshot(details, job) });
+      if (state === "running" || state === "waiting_input") {
+        const waitingPermission = await this.waitingForPermission(details);
+        const activeState = waitingPermission ? "waiting_permission" : state;
+        await this.options.control.update(taskId, activeState, {
+          ...details, usage: usageSnapshot(details, job),
+          ...(waitingPermission ? { blockReason: "CodeBuddy has an executable tool call waiting for permission." } : {}),
+        });
         await wait(this.pollMs, signal);
         continue;
       }
@@ -152,6 +162,17 @@ export class CloudWorkerAgent {
       const delivery = await this.deliver(taskId, projectId, details);
       await this.options.control.update(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery });
       return;
+    }
+  }
+
+  private async waitingForPermission(details: JobDetails): Promise<boolean> {
+    if (details.permissionMode === "auto" || !this.options.codeBuddy.transcript) return false;
+    try {
+      return hasAgedPendingExecutable(await this.options.codeBuddy.transcript(details.remoteJobId), Date.now(), this.permissionPendingMs);
+    } catch {
+      // Status polling remains authoritative when the optional diagnostic
+      // transcript endpoint is unavailable.
+      return false;
     }
   }
 
@@ -188,16 +209,37 @@ export class CloudWorkerAgent {
 function developmentPrompt(task: CloudTask, baseSha: string, branch: string, maxRepairRounds: number): string {
   return `ClawBridge task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
 }
-function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" {
-  return profile === "acceptEdits" || profile === "auto" ? profile : "default";
+function permissionMode(profile: string | undefined): BackgroundPermissionMode {
+  return profile === "default" || profile === "acceptEdits" || profile === "auto" ? profile : "auto";
 }
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 2_000) : "Unknown worker error."; }
-function jobDetails(result: Record<string, unknown> | undefined): JobDetails | undefined {
+function jobDetails(result: Record<string, unknown> | undefined, fallbackPermissionMode?: BackgroundPermissionMode): JobDetails | undefined {
   if (!result) return undefined;
-  const { remoteJobId, worktreePath, baseSha, branch, deadlineAt, dispatchedAt, requestedModel } = result;
+  const { remoteJobId, worktreePath, baseSha, branch, deadlineAt, dispatchedAt, requestedModel, permissionMode: storedPermissionMode } = result;
+  const restoredPermissionMode = storedPermissionMode === "default" || storedPermissionMode === "acceptEdits" || storedPermissionMode === "auto" ? storedPermissionMode : fallbackPermissionMode;
   return typeof remoteJobId === "string" && typeof worktreePath === "string" && typeof baseSha === "string" && typeof branch === "string"
-    ? { remoteJobId, worktreePath, baseSha, branch, ...(typeof deadlineAt === "string" ? { deadlineAt } : {}), ...(typeof dispatchedAt === "string" ? { dispatchedAt } : {}), ...(typeof requestedModel === "string" ? { requestedModel } : {}) }
+    ? { remoteJobId, worktreePath, baseSha, branch, ...(typeof deadlineAt === "string" ? { deadlineAt } : {}), ...(typeof dispatchedAt === "string" ? { dispatchedAt } : {}), ...(typeof requestedModel === "string" ? { requestedModel } : {}), ...(restoredPermissionMode ? { permissionMode: restoredPermissionMode } : {}) }
     : undefined;
+}
+
+export function hasAgedPendingExecutable(transcript: CodeBuddyTranscript, nowMs: number, minimumAgeMs: number): boolean {
+  const completed = new Set<string>();
+  for (const update of transcript.updates) {
+    const record = object(update);
+    if (record?.sessionUpdate !== "tool_call_update" || typeof record.toolCallId !== "string" || record.status === "pending") continue;
+    completed.add(record.toolCallId);
+  }
+  return transcript.updates.some((update) => {
+    const record = object(update);
+    if (record?.sessionUpdate !== "tool_call" || record.status !== "pending" || record.kind !== "execute" || typeof record.toolCallId !== "string" || completed.has(record.toolCallId)) return false;
+    const metadata = object(record._meta);
+    const timestamp = typeof metadata?.timestamp === "string" ? Date.parse(metadata.timestamp) : Number.NaN;
+    return Number.isFinite(timestamp) && nowMs - timestamp >= minimumAgeMs;
+  });
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 function usageSnapshot(details: JobDetails, job?: Record<string, unknown>): Record<string, string | number> {
   const observedModel = stringAt(job, ["model"]) ?? stringAt(job, ["modelId"]) ?? stringAt(job, ["metadata", "model"]);

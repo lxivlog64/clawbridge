@@ -9,13 +9,13 @@ const taskInput = z.object({
   idempotencyKey: z.string().min(8).max(200).regex(/^[A-Za-z0-9._:-]+$/), model: z.string().min(1).max(200).optional(),
 }).strict();
 const workerUpdate = z.object({
-  state: z.enum(["running", "succeeded", "failed", "cancelled", "unknown"]),
+  state: z.enum(["running", "waiting_input", "waiting_permission", "succeeded", "failed", "cancelled", "unknown"]),
   result: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 const heartbeatInput = z.object({ metadata: z.record(z.string(), z.unknown()).optional() }).strict();
 const reconcileInput = z.object({ action: z.enum(["close", "requeue"]), remoteJobConfirmedStopped: z.literal(true) }).strict();
 const reviewInput = z.object({ conclusion: z.enum(["approved", "changes_requested"]), comment: z.string().min(1).max(10_000).optional(), reviewedHeadSha: z.string().regex(/^[0-9a-f]{40}$/i) }).strict();
-const listInput = z.object({ projectId: z.string().min(1).max(80).optional(), state: z.enum(["queued", "leased", "running", "cancel_requested", "succeeded", "failed", "cancelled", "unknown"]).optional(), limit: z.coerce.number().int().min(1).max(100).optional() });
+const listInput = z.object({ projectId: z.string().min(1).max(80).optional(), state: z.enum(["queued", "leased", "running", "waiting_input", "waiting_permission", "cancel_requested", "succeeded", "failed", "cancelled", "unknown"]).optional(), limit: z.coerce.number().int().min(1).max(100).optional() });
 
 export interface CloudControlOptions {
   apiToken: string;

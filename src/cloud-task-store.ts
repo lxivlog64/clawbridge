@@ -4,7 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type { NotificationEvent, NotificationOutbox } from "./notifier.js";
 
-export type CloudTaskState = "queued" | "leased" | "running" | "cancel_requested" | "succeeded" | "failed" | "cancelled" | "unknown";
+export type CloudTaskState = "queued" | "leased" | "running" | "waiting_input" | "waiting_permission" | "cancel_requested" | "succeeded" | "failed" | "cancelled" | "unknown";
 
 export interface CloudTask {
   taskId: string;
@@ -136,7 +136,7 @@ export class CloudTaskStore implements NotificationOutbox {
     const now = new Date().toISOString();
     if (current.state === "queued") {
       this.db.prepare("UPDATE cloud_tasks SET state = 'cancelled', updated_at = ? WHERE task_id = ?").run(now, taskId);
-    } else if (current.state === "leased" || current.state === "running" || current.state === "cancel_requested") {
+    } else if (current.state === "leased" || current.state === "running" || current.state === "waiting_input" || current.state === "waiting_permission" || current.state === "cancel_requested") {
       this.db.prepare("UPDATE cloud_tasks SET state = 'cancel_requested', updated_at = ? WHERE task_id = ?").run(now, taskId);
     } else {
       throw new CloudTaskConflictError("An unknown task must be reconciled before it can be cancelled.");
@@ -177,14 +177,14 @@ export class CloudTaskStore implements NotificationOutbox {
     // recovery.  Only this Worker can do so because the lease owner is part
     // of the predicate.
     this.db.prepare(`UPDATE cloud_tasks SET lease_expires_at = ?, updated_at = ?
-      WHERE lease_owner = ? AND state IN ('leased', 'running', 'cancel_requested')`)
+      WHERE lease_owner = ? AND state IN ('leased', 'running', 'waiting_input', 'waiting_permission', 'cancel_requested')`)
       .run(new Date(Date.now() + leaseMs).toISOString(), lastSeenAt, workerId);
     return { workerId, lastSeenAt, ...(metadata ? { metadata } : {}) };
   }
 
   activeForWorker(workerId: string): CloudTask[] {
     const rows = this.db.prepare(`SELECT * FROM cloud_tasks
-      WHERE worker_id = ? AND lease_owner = ? AND state IN ('leased', 'running', 'cancel_requested')
+      WHERE worker_id = ? AND lease_owner = ? AND state IN ('leased', 'running', 'waiting_input', 'waiting_permission', 'cancel_requested')
       ORDER BY created_at ASC`).all(workerId, workerId) as TaskRow[];
     return rows.map(taskFromRow);
   }
@@ -199,7 +199,7 @@ export class CloudTaskStore implements NotificationOutbox {
       const candidate = candidates.find((item) => {
         const limit = projectConcurrency[item.project_id] ?? 1;
         const active = this.db.prepare(`SELECT COUNT(*) AS count FROM cloud_tasks
-          WHERE project_id = ? AND state IN ('leased', 'running', 'cancel_requested')`).get(item.project_id) as { count: number };
+          WHERE project_id = ? AND state IN ('leased', 'running', 'waiting_input', 'waiting_permission', 'cancel_requested')`).get(item.project_id) as { count: number };
         return active.count < limit;
       });
       if (!candidate) return undefined;
@@ -223,7 +223,7 @@ export class CloudTaskStore implements NotificationOutbox {
     // A client cancellation wins over a late Worker heartbeat.  The Worker
     // will read this state and stop its remote CodeBuddy job before reporting
     // the terminal cancelled state.
-    const nextState = current.state === "cancel_requested" && state === "running" ? "cancel_requested" : state;
+    const nextState = current.state === "cancel_requested" && (state === "running" || state === "waiting_input" || state === "waiting_permission") ? "cancel_requested" : state;
     if (!allowsWorkerTransition(current.state, nextState)) {
       throw new CloudTaskConflictError(`Worker cannot change task state from ${current.state} to ${nextState}.`);
     }
@@ -319,8 +319,11 @@ export class CloudTaskConflictError extends Error {}
 
 function isTerminal(state: CloudTaskState): boolean { return state === "succeeded" || state === "failed" || state === "cancelled"; }
 function allowsWorkerTransition(current: CloudTaskState, next: CloudTaskState): boolean {
-  if (current === "leased") return next === "running" || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
-  if (current === "running") return next === "running" || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  const active = next === "running" || next === "waiting_input" || next === "waiting_permission";
+  if (current === "leased") return active || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  if (current === "running" || current === "waiting_input" || current === "waiting_permission") {
+    return active || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  }
   if (current === "cancel_requested") return next === "cancel_requested" || next === "cancelled" || next === "unknown";
   return false;
 }

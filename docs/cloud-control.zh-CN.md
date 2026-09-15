@@ -19,6 +19,8 @@ Codex on Mac → HTTPS control API on VPS ← outbound HTTPS polling ← Linux W
 
 每个项目登记项可设置 `maxRuntimeMinutes`、`maxConcurrentJobs` 与 `maxRepairRounds`，默认分别为 120 分钟、1 个并行任务和 1 轮修复。云端领取任务时会原子地检查项目并发上限；运行超时会向 CodeBuddy 请求停止，并把任务记为失败。修复轮次会写入开发指令，要求模型超过限制时报告阻塞原因而不是继续消耗积分。
 
+无人值守 Worker 的项目应设置 `permissionProfile: "auto"`。若兼容项目仍使用 `default` 或 `acceptEdits`，Worker 会检查 CodeBuddy transcript；可执行工具调用超过 120 秒没有完成更新时，云端状态变为 `waiting_permission`，继续保留租约并允许取消或在批准后恢复。`acceptEdits` 只批准编辑，不会保证 Git 与测试命令自动执行。
+
 这些限制以项目登记文件为准；修改 `/etc/clawbridge/projects.json` 后需要重启 VPS 服务，并同步更新相关 Worker 的项目登记文件。
 
 ## 用量记录
