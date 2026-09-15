@@ -11,7 +11,7 @@ Codex on Mac → HTTPS control API on VPS ← outbound HTTPS polling ← Linux W
 
 - VPS：带 Bearer Token 的任务提交、查询、Worker 心跳、原子租约领取与状态回传。
 - Worker：领取任务，在本地创建受控 worktree，调用本机回环 CodeBuddy，完成后推送任务分支并创建草稿 PR。
-- Codex 的云端 MCP 客户端已提供提交和状态查询；PostgreSQL、多副本调度、浏览器控制台与自动扩缩容尚未实现。
+- Codex 的云端 MCP 客户端已提供提交、状态查询与只读项目发现；PostgreSQL、多副本调度、浏览器控制台与自动扩缩容尚未实现。
 
 任务租约默认 90 秒。Worker 在运行期间回传状态并续租；Worker 离线时，租约会过期，后续版本会提供更严格的恢复与人工接管流程。未知状态不会自动重派。
 
@@ -76,6 +76,7 @@ Mac 客户端 Token：
 
 - `POST /v1/tasks`：提交 `{ projectId, spec, idempotencyKey, model? }`
 - `GET /v1/tasks/:taskId`：读取不含完整规格的状态
+- `GET /v1/projects`：读取已登记的只读项目列表（仅返回项目 ID、仓库、默认分支、目标 Worker 与能力等脱敏元数据；不含本地路径、凭据、CodeBuddy Token、允许工具或任务规格）
 
 Worker Token：
 
@@ -96,7 +97,7 @@ codex mcp add clawbridge-cloud \
   -- node /absolute/path/to/clawbridge/dist/src/cloud-mcp.js
 ```
 
-随后使用 `clawbridge_cloud_submit` 提交任务，保存返回的 `taskId`；使用 `clawbridge_cloud_status` 查询开发、提交 SHA 与草稿 PR 状态。Codex 可在任务提交后退出，不需要维持到 Worker 的连接。
+随后使用 `clawbridge_cloud_submit` 提交任务，保存返回的 `taskId`；使用 `clawbridge_cloud_status` 查询开发、提交 SHA 与草稿 PR 状态。可用 `clawbridge_cloud_projects` 只读列出已登记项目，以便在提交前确认 `projectId`；该工具不会返回本地路径、凭据或任务规格。Codex 可在任务提交后退出，不需要维持到 Worker 的连接。
 
 ## 上线前检查
 

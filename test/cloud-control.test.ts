@@ -31,6 +31,31 @@ test("cloud control authenticates clients and leases a task only to its register
     const denied = await fetch(`${origin}/v1/tasks`, { method: "POST" });
     assert.equal(denied.status, 401);
 
+    const projectsDenied = await fetch(`${origin}/v1/projects`);
+    assert.equal(projectsDenied.status, 401);
+    const projectsWrong = await fetch(`${origin}/v1/projects`, { headers: auth("wrong-token-which-is-long-enough") });
+    assert.equal(projectsWrong.status, 401);
+
+    const projectsResponse = await fetch(`${origin}/v1/projects`, { headers: auth("client-token-which-is-long-enough") });
+    assert.equal(projectsResponse.status, 200);
+    const listed = await json(projectsResponse);
+    assert.equal(listed.projects.length, 1);
+    const project = listed.projects[0];
+    assert.equal(project.id, "sample");
+    assert.equal(project.repository, "owner/sample");
+    assert.equal(project.defaultBranch, "main");
+    assert.equal(project.workerId, "worker-a");
+    assert.equal("remoteRepositoryPath" in project, false);
+    assert.equal("allowedTools" in project, false);
+    assert.equal("githubCredentialRef" in project, false);
+    assert.equal("testCommands" in project, false);
+    assert.equal("spec" in project, false);
+
+    const projectsRaw = await (await fetch(`${origin}/v1/projects`, { headers: auth("client-token-which-is-long-enough") })).text();
+    assert.equal(projectsRaw.includes("/srv/projects"), false);
+    assert.equal(projectsRaw.includes("client-token"), false);
+    assert.equal(projectsRaw.includes("worker-token"), false);
+
     const created = await json(await fetch(`${origin}/v1/tasks`, {
       method: "POST", headers: auth("client-token-which-is-long-enough"),
       body: JSON.stringify({ projectId: "sample", spec: "Add a health endpoint", idempotencyKey: "cloud-request-0001", model: "hy4-preview" }),
@@ -64,10 +89,14 @@ test("cloud control authenticates clients and leases a task only to its register
   }
 });
 
-test("cloud MCP publishes submit and status tools against the authenticated control plane", async () => {
+test("cloud MCP publishes submit, status, and read-only projects tools", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-mcp-"));
   const registryFile = path.join(directory, "projects.json");
-  await fs.writeFile(registryFile, JSON.stringify({ schemaVersion: 1, workers: [], projects: [] }));
+  await fs.writeFile(registryFile, JSON.stringify({
+    schemaVersion: 1,
+    workers: [{ id: "worker-a", sshHost: "unused", codebuddyExecutable: "codebuddy", allowedRoots: ["/srv/projects"] }],
+    projects: [{ id: "sample", repository: "owner/sample", defaultBranch: "main", workerId: "worker-a", remoteRepositoryPath: "/srv/projects/sample", allowedTools: ["Bash(npm test)"] }],
+  }));
   const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
   const token = "cloud-mcp-client-token-long-enough";
   const server = createCloudControlServer({ apiToken: token, workerTokens: {}, projects: ProjectRegistry.load(registryFile), tasks: store });
@@ -80,7 +109,17 @@ test("cloud MCP publishes submit and status tools against the authenticated cont
   await client.connect(transport);
   try {
     const tools = await client.listTools();
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["clawbridge_cloud_status", "clawbridge_cloud_submit"]);
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["clawbridge_cloud_projects", "clawbridge_cloud_status", "clawbridge_cloud_submit"]);
+
+    const result = await client.callTool({ name: "clawbridge_cloud_projects", arguments: {} });
+    const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
+    const payload = JSON.parse(text);
+    assert.equal(payload.projects.length, 1);
+    assert.equal(payload.projects[0].id, "sample");
+    assert.equal(payload.projects[0].repository, "owner/sample");
+    assert.equal("remoteRepositoryPath" in payload.projects[0], false);
+    assert.equal("allowedTools" in payload.projects[0], false);
+    assert.equal(text.includes("/srv/projects"), false);
   } finally {
     await client.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));

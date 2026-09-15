@@ -35,4 +35,11 @@ server.tool(
   },
 );
 
+server.tool(
+  "clawbridge_cloud_projects",
+  "List the projects registered for cloud dispatch with their sanitized metadata (id, repository, branch, worker, capabilities). Local paths, credentials, allowed tools, and task specifications are never returned.",
+  {},
+  async () => json({ projects: await client.projects() }),
+);
+
 await server.connect(new StdioServerTransport());

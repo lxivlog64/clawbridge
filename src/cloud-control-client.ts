@@ -1,10 +1,15 @@
 import type { CloudTask, CloudTaskState } from "./cloud-task-store.js";
+import type { ProjectSummary } from "./project-registry.js";
 
 export class CloudControlClient {
   constructor(private readonly baseUrl: string, private readonly token: string, private readonly fetchFn: typeof fetch = fetch) {}
 
   async submit(input: { projectId: string; spec: string; idempotencyKey: string; model?: string }): Promise<{ task: CloudTask; reused: boolean }> {
     return this.request("/v1/tasks", { method: "POST", body: JSON.stringify(input) });
+  }
+
+  async projects(): Promise<ProjectSummary[]> {
+    return (await this.request<{ projects: ProjectSummary[] }>("/v1/projects", {})).projects;
   }
 
   async task(taskId: string): Promise<CloudTask | undefined> {
