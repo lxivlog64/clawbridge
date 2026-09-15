@@ -221,3 +221,26 @@ test("restarted Worker resumes an accepted job instead of dispatching a second j
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("a graceful Worker stop preserves an accepted job for later recovery", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-graceful-stop-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  const abort = new AbortController();
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() { return { id: "job-1", state: "working", alive: true, settled: false }; },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control: controlFor(task, updates), codeBuddy, localWorker: healthyGit(), pollMs: 1_000,
+    });
+    setTimeout(() => abort.abort(), 5);
+    assert.equal(await agent.once(abort.signal), true);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "running"]);
+    assert.equal(updates.at(-1)?.result?.remoteJobId, "job-1");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
