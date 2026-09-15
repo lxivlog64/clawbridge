@@ -33,16 +33,17 @@ export class CloudWorkerAgent {
     this.localWorker = options.localWorker ?? new LocalWorker();
   }
 
-  async once(): Promise<boolean> {
+  async once(signal?: AbortSignal): Promise<boolean> {
     await this.options.control.heartbeat(this.options.workerId, { version: "0.1.0", runtime: "node" });
-    if (await this.resumeActiveTask()) return true;
+    if (await this.resumeActiveTask(signal)) return true;
+    if (signal?.aborted) return false;
     const claimed = await this.options.control.claim(this.options.workerId);
     if (!claimed.task) return false;
-    await this.execute(claimed.task);
+    await this.execute(claimed.task, signal);
     return true;
   }
 
-  private async resumeActiveTask(): Promise<boolean> {
+  private async resumeActiveTask(signal?: AbortSignal): Promise<boolean> {
     if (!this.options.control.activeTasks) return false;
     const task = (await this.options.control.activeTasks(this.options.workerId))[0];
     if (!task) return false;
@@ -55,8 +56,9 @@ export class CloudWorkerAgent {
       return true;
     }
     try {
-      await this.awaitCompletion(task.taskId, task.projectId, details);
+      await this.awaitCompletion(task.taskId, task.projectId, details, signal);
     } catch (error) {
+      if (signal?.aborted) return true;
       await this.options.control.update(task.taskId, "unknown", { ...details, error: message(error) });
     }
     return true;
@@ -64,12 +66,12 @@ export class CloudWorkerAgent {
 
   async run(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
-      try { await this.once(); } catch { /* The next poll performs a fresh authenticated heartbeat. */ }
+      try { await this.once(signal); } catch { /* The next poll performs a fresh authenticated heartbeat. */ }
       await wait(this.pollMs, signal);
     }
   }
 
-  private async execute(task: CloudTask): Promise<void> {
+  private async execute(task: CloudTask, signal?: AbortSignal): Promise<void> {
     // Set once CodeBuddy accepts the job. From that point on a local error is
     // ambiguous: the remote job may still be running, so it must not be
     // reported as a terminal failure or silently retried.
@@ -79,6 +81,7 @@ export class CloudWorkerAgent {
       if (project.workerId !== this.options.workerId) throw new Error("Task is assigned to a different worker.");
       const preflight = this.options.projects.preflight(project.id);
       if (!preflight.ready) throw new Error(preflight.blockers.join(" "));
+      if (signal?.aborted) return;
       const worker = this.options.projects.workerFor(project.id);
       const prepared = await prepareWorktree(task.taskId, project, worker, this.localWorker, (candidate) => this.options.projects.allowsPath(project.id, candidate));
       if (!prepared.ok) throw new Error(prepared.reason);
@@ -98,18 +101,22 @@ export class CloudWorkerAgent {
       if (!job.id) throw new Error("CodeBuddy gateway returned no job id.");
       accepted = { remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch };
       await this.options.control.update(task.taskId, "running", accepted);
-      await this.awaitCompletion(task.taskId, task.projectId, accepted);
+      await this.awaitCompletion(task.taskId, task.projectId, accepted, signal);
     } catch (error) {
       // Before a remote job id exists nothing was dispatched, so the attempt is
       // safely failed. Afterwards the remote job may still be running, so the
       // outcome is unknown and must be reconciled by an operator, not retried here.
+      if (signal?.aborted) return;
       if (accepted) await this.options.control.update(task.taskId, "unknown", { ...accepted, error: message(error) });
       else await this.options.control.update(task.taskId, "failed", { error: message(error) });
     }
   }
 
-  private async awaitCompletion(taskId: string, projectId: string, details: JobDetails): Promise<void> {
+  private async awaitCompletion(taskId: string, projectId: string, details: JobDetails, signal?: AbortSignal): Promise<void> {
     while (true) {
+      // A clean service stop is not an execution failure. Keep the persisted
+      // coordinates and let the next Worker process recover the same job.
+      if (signal?.aborted) return;
       if (await this.cancelRequested(taskId)) {
         if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job cancellation.");
         await this.options.codeBuddy.stop(details.remoteJobId);
@@ -120,7 +127,7 @@ export class CloudWorkerAgent {
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
       if (state === "running") {
         await this.options.control.update(taskId, "running", details);
-        await wait(this.pollMs);
+        await wait(this.pollMs, signal);
         continue;
       }
       if (state !== "succeeded") {
