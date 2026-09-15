@@ -50,12 +50,12 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         const input = taskInput.parse(await body(request));
         const project = options.projects.require(input.projectId);
         const created = options.tasks.createOrGet({ projectId: input.projectId, workerId: project.workerId, spec: input.spec, idempotencyKey: input.idempotencyKey, requestedModel: input.model ?? project.defaultModel });
-        return send(response, 201, { ...created, task: publicTask(created.task) });
+        return send(response, 201, { ...created, task: clientTask(created.task) });
       }
       if (client && request.method === "GET") {
         requireToken(request, options.apiToken);
         const input = listInput.parse(Object.fromEntries(url.searchParams));
-        return send(response, 200, { tasks: options.tasks.list(input).map((task) => publicTask(task)) });
+        return send(response, 200, { tasks: options.tasks.list(input).map(clientTask) });
       }
       if (projectList) {
         requireToken(request, options.apiToken);
@@ -64,23 +64,23 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
       if (taskMatch && request.method === "GET") {
         requireToken(request, options.apiToken);
         const task = options.tasks.get(taskMatch[1]!);
-        return task ? send(response, 200, { task: publicTask(task) }) : send(response, 404, { error: "Task not found." });
+        return task ? send(response, 200, { task: clientTask(task) }) : send(response, 404, { error: "Task not found." });
       }
       if (cancelMatch && request.method === "POST") {
         requireToken(request, options.apiToken);
         const task = options.tasks.requestCancellation(cancelMatch[1]!);
-        return send(response, 200, { task: publicTask(task) });
+        return send(response, 200, { task: clientTask(task) });
       }
       if (reconcileMatch && request.method === "POST") {
         requireToken(request, options.apiToken);
         const input = reconcileInput.parse(await body(request));
         const task = options.tasks.resolveUnknown(reconcileMatch[1]!, input.action, input.remoteJobConfirmedStopped);
-        return send(response, 200, { task: publicTask(task) });
+        return send(response, 200, { task: clientTask(task) });
       }
       if (reviewMatch && request.method === "POST") {
         requireToken(request, options.apiToken);
         const input = reviewInput.parse(await body(request));
-        return send(response, 200, { task: publicTask(options.tasks.recordReview(reviewMatch[1]!, input)) });
+        return send(response, 200, { task: clientTask(options.tasks.recordReview(reviewMatch[1]!, input)) });
       }
       if (reviewMatch && request.method === "GET") {
         requireToken(request, options.apiToken);
@@ -88,7 +88,7 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         if (!task) return send(response, 404, { error: "Task not found." });
         const remoteHead = await githubHead(task.result?.prUrl, options.fetchFn ?? fetch);
         if (remoteHead) task = options.tasks.observeReviewHead(task.taskId, remoteHead);
-        return send(response, 200, { task: publicTask(task) });
+        return send(response, 200, { task: clientTask(task) });
       }
       if (eventMatch && request.method === "POST") {
         const task = options.tasks.get(eventMatch[1]!);
@@ -145,6 +145,15 @@ async function body(request: IncomingMessage): Promise<unknown> {
 function publicTask(task: ReturnType<CloudTaskStore["get"]> extends infer T ? Exclude<T, undefined> : never, includeSpec = false) {
   const { spec, ...safe } = task;
   return includeSpec ? task : safe;
+}
+function clientTask(task: ReturnType<CloudTaskStore["get"]> extends infer T ? Exclude<T, undefined> : never) {
+  const { spec, leaseOwner, leaseExpiresAt, result, ...safe } = task;
+  void spec; void leaseOwner; void leaseExpiresAt;
+  return { ...safe, ...(result ? { result: clientResult(result) } : {}) };
+}
+function clientResult(result: Record<string, unknown>): Record<string, unknown> {
+  const allowed = ["remoteJobId", "baseSha", "branch", "commitSha", "headSha", "prUrl", "remoteState", "cancellation", "error", "usage", "reconciliation", "deadlineAt", "dispatchedAt", "requestedModel"];
+  return Object.fromEntries(allowed.filter((key) => result[key] !== undefined).map((key) => [key, result[key]]));
 }
 
 function requireToken(request: IncomingMessage, expected: string): void {
