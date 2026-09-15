@@ -203,10 +203,13 @@ export class CloudTaskStore implements NotificationOutbox {
     // will read this state and stop its remote CodeBuddy job before reporting
     // the terminal cancelled state.
     const nextState = current.state === "cancel_requested" && state === "running" ? "cancel_requested" : state;
-    const terminal = isTerminal(nextState);
-    const leaseExpiresAt = terminal ? null : new Date(now.getTime() + leaseMs).toISOString();
-    this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
-      .run(nextState, result ? JSON.stringify(result) : null, leaseExpiresAt, now.toISOString(), taskId);
+    if (!allowsWorkerTransition(current.state, nextState)) {
+      throw new CloudTaskConflictError(`Worker cannot change task state from ${current.state} to ${nextState}.`);
+    }
+    const releasesLease = isTerminal(nextState) || nextState === "unknown";
+    const leaseExpiresAt = releasesLease ? null : new Date(now.getTime() + leaseMs).toISOString();
+    this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_owner = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
+      .run(nextState, result ? JSON.stringify(result) : null, releasesLease ? null : workerId, leaseExpiresAt, now.toISOString(), taskId);
     let task = this.get(taskId)!;
     this.invalidateReviewIfHeadChanged(task);
     task = this.get(taskId)!;
@@ -288,6 +291,12 @@ export class CloudTaskStore implements NotificationOutbox {
 export class CloudTaskConflictError extends Error {}
 
 function isTerminal(state: CloudTaskState): boolean { return state === "succeeded" || state === "failed" || state === "cancelled"; }
+function allowsWorkerTransition(current: CloudTaskState, next: CloudTaskState): boolean {
+  if (current === "leased") return next === "running" || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  if (current === "running") return next === "running" || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  if (current === "cancel_requested") return next === "cancel_requested" || next === "cancelled" || next === "unknown";
+  return false;
+}
 
 function taskFromRow(row: TaskRow): CloudTask {
   return {
