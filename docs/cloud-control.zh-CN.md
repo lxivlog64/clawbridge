@@ -106,6 +106,20 @@ Worker 只需能出站访问 VPS 的 HTTPS 地址；无需公网 IP、入站端�
 
 每个项目固定登记一个 `workerId`。领取、活动任务读取和状态回传都会校验该 Worker 的独立 Token，因此 Worker A 不能领取或更新 Worker B 的任务。多个项目可由不同 Worker 并行执行；撤销某一台 Worker 时只删除它对应的 Token 并重启 VPS 服务，其他 Worker 的 Token 和任务不受影响。实际接入第二台 Worker 前，先为它创建新的 ID、随机 Token、独立项目路径与 CodeBuddy 登录态，绝不复制第一台的 Gateway 密码或 Token。
 
+## 备份、恢复与健康检查
+
+使用 `scripts/backup-cloud-state.sh` 创建一致性的 SQLite 备份；不要直接复制运行中的 `cloud.sqlite` 或 WAL 文件。脚本默认每日保留 14 天，备份目录为 `/var/backups/clawbridge`，权限为仅 root 可读。安装仓库中的 systemd service/timer 并启用 timer：
+
+```bash
+sudo cp deploy/systemd/clawbridge-cloud-backup.* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now clawbridge-cloud-backup.timer
+```
+
+恢复演练应在维护窗口完成：停止云端服务，将当前数据库改名保留，复制选定备份到 `/var/lib/clawbridge/cloud.sqlite`，以 `clawbridge` 用户权限运行 `scripts/verify-cloud-backup.sh`，然后启动服务并访问 `/health`。不要在未验证备份前覆盖当前数据库。
+
+日常健康检查应同时验证：`systemctl is-active clawbridge-cloud.service`、回环 `/health` 返回 `{"ok":true}`、备份 timer 最近一次执行成功，以及通知 outbox 没有持续积压。告警应发送到与 Server酱不同的运维渠道；连续失败、备份超过 26 小时未生成或 `/health` 不可用时，先暂停新任务并保留数据库与日志供排查。
+
 ## API 摘要
 
 Mac 客户端 Token：
