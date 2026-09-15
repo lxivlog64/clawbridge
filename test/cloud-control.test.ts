@@ -105,7 +105,7 @@ test("private cloud worker creates a worktree, runs CodeBuddy, and reports a dra
   };
   const updates: Array<{ state: string; result?: Record<string, unknown> }> = [];
   const control = {
-    async heartbeat() {}, async claim() { return { task, leaseMs: 60_000 }; }, async task() { return task; },
+    async heartbeat() {}, async claim() { return { task, leaseMs: 60_000 }; },
     async update(_id: string, state: any, result?: Record<string, unknown>) { updates.push({ state, result }); return { ...task, state, ...(result ? { result } : {}) }; },
   };
   const result = (stdout = "", stderr = "", exitCode = 0): RemoteCommandResult => ({ stdout, stderr, exitCode });
