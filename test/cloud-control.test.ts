@@ -13,6 +13,24 @@ import { CloudWorkerAgent } from "../src/cloud-worker-agent.js";
 import type { CloudTask } from "../src/cloud-task-store.js";
 import type { RemoteCommandResult } from "../src/remote-worker.js";
 import { flushNotifications, WebhookNotifier } from "../src/notifier.js";
+import Database from "better-sqlite3";
+
+test("cloud state changes roll back when their outbox event cannot be written", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-atomic-outbox-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  const store = new CloudTaskStore(databaseFile);
+  try {
+    const task = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "Atomic", idempotencyKey: "atomic-outbox-001" }).task;
+    const blocker = new Database(databaseFile);
+    blocker.exec("CREATE TRIGGER reject_event BEFORE INSERT ON cloud_task_events BEGIN SELECT RAISE(ABORT, 'event rejected'); END;");
+    blocker.close();
+    assert.throws(() => store.requestCancellation(task.taskId), /event rejected/);
+    assert.equal(store.get(task.taskId)?.state, "queued", "state must roll back with the failed event insert");
+  } finally {
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("cloud task events are durable, acknowledged only after delivery, and back off after a failure", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-events-"));
