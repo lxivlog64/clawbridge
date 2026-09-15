@@ -33,7 +33,15 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
   return http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
-      if (request.method === "GET" && url.pathname === "/health") return send(response, 200, { ok: true });
+      if (request.method === "GET" && url.pathname === "/health") {
+        const ok = options.tasks.healthCheck();
+        return send(response, ok ? 200 : 503, { ok });
+      }
+      if (request.method === "GET" && url.pathname === "/ready") {
+        requireToken(request, options.apiToken);
+        const diagnostics = options.tasks.diagnostics();
+        return send(response, diagnostics.database === "ok" ? 200 : 503, { ok: diagnostics.database === "ok", ...diagnostics });
+      }
       const client = url.pathname === "/v1/tasks" && (request.method === "POST" || request.method === "GET");
       const projectList = url.pathname === "/v1/projects" && request.method === "GET";
       const taskMatch = /^\/v1\/tasks\/([0-9a-f-]{36})$/i.exec(url.pathname);
