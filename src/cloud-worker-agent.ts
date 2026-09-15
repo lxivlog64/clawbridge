@@ -6,7 +6,7 @@ import type { ProjectRegistry } from "./project-registry.js";
 import { LocalWorker } from "./remote-worker.js";
 import { prepareWorktree, type GitPreparerRemote } from "./worktree-preparer.js";
 
-type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "task" | "update">;
+type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "update">;
 type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob">;
 interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
@@ -67,13 +67,13 @@ export class CloudWorkerAgent {
       if (!job.id) throw new Error("CodeBuddy gateway returned no job id.");
       const details = { remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch };
       await this.options.control.update(task.taskId, "running", details);
-      await this.awaitCompletion(task.taskId, job.id, details);
+      await this.awaitCompletion(task.taskId, task.projectId, job.id, details);
     } catch (error) {
       await this.options.control.update(task.taskId, "failed", { error: message(error) });
     }
   }
 
-  private async awaitCompletion(taskId: string, jobId: string, details: { remoteJobId: string; worktreePath: string; baseSha: string; branch: string }): Promise<void> {
+  private async awaitCompletion(taskId: string, projectId: string, jobId: string, details: { remoteJobId: string; worktreePath: string; baseSha: string; branch: string }): Promise<void> {
     while (true) {
       const job = await this.options.codeBuddy.getJob(jobId);
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
@@ -86,15 +86,13 @@ export class CloudWorkerAgent {
         await this.options.control.update(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, remoteState: state });
         return;
       }
-      const delivery = await this.deliver(taskId, details);
+      const delivery = await this.deliver(taskId, projectId, details);
       await this.options.control.update(taskId, "succeeded", { ...details, ...delivery });
       return;
     }
   }
 
-  private async deliver(taskId: string, details: { worktreePath: string; baseSha: string; branch: string }): Promise<{ headSha: string; prUrl: string }> {
-    const projectId = (await this.options.control.task(taskId))?.projectId;
-    if (!projectId) throw new Error("Cloud task disappeared before delivery.");
+  private async deliver(taskId: string, projectId: string, details: { worktreePath: string; baseSha: string; branch: string }): Promise<{ headSha: string; prUrl: string }> {
     const project = this.options.projects.require(projectId);
     const worker = this.options.projects.workerFor(project.id);
     const head = await this.localWorker.git(worker, details.worktreePath, ["rev-parse", "HEAD"]);
