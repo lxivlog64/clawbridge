@@ -21,6 +21,10 @@ Codex on Mac → HTTPS control API on VPS ← outbound HTTPS polling ← Linux W
 
 这些限制以项目登记文件为准；修改 `/etc/clawbridge/projects.json` 后需要重启 VPS 服务，并同步更新相关 Worker 的项目登记文件。
 
+## 用量记录
+
+每次任务都会在其云端状态结果的 `usage` 字段记录请求模型、Gateway 实际返回的模型、从 CodeBuddy 接受任务起计算的耗时，以及 Gateway 明确返回的输入/输出 Token 和积分数。未由 Gateway 返回的字段固定为 `"unknown"`，不以模型名称、耗时或套餐推算积分。该记录只保存经过筛选的标量字段，不保存完整 Gateway 响应、提示词、凭据或思考过程。
+
 ## VPS 安装
 
 在 Ubuntu VPS 上创建专用非 root 用户，克隆仓库并安装 Node.js 20+。不要把 Worker 的 CodeBuddy 密码、GitHub 凭据或 SSH 私钥复制到 VPS。

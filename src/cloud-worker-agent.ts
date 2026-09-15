@@ -12,7 +12,7 @@ interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
 }
 /** Persisted coordinates of an accepted remote job, retained even when its final outcome is unknown. */
-type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string; deadlineAt?: string };
+type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string; deadlineAt?: string; dispatchedAt?: string; requestedModel?: string };
 
 export interface CloudWorkerAgentOptions {
   workerId: string;
@@ -106,15 +106,16 @@ export class CloudWorkerAgent {
       accepted = {
         remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch,
         deadlineAt: new Date(Date.now() + project.maxRuntimeMinutes * 60_000).toISOString(),
+        dispatchedAt: new Date().toISOString(), requestedModel: task.requestedModel,
       };
-      await this.options.control.update(task.taskId, "running", accepted);
+      await this.options.control.update(task.taskId, "running", { ...accepted, usage: usageSnapshot(accepted, job) });
       await this.awaitCompletion(task.taskId, task.projectId, accepted, signal);
     } catch (error) {
       // Before a remote job id exists nothing was dispatched, so the attempt is
       // safely failed. Afterwards the remote job may still be running, so the
       // outcome is unknown and must be reconciled by an operator, not retried here.
       if (signal?.aborted) return;
-      if (accepted) await this.options.control.update(task.taskId, "unknown", { ...accepted, error: message(error) });
+      if (accepted) await this.options.control.update(task.taskId, "unknown", { ...accepted, usage: usageSnapshot(accepted), error: message(error) });
       else await this.options.control.update(task.taskId, "failed", { error: message(error) });
     }
   }
@@ -127,28 +128,28 @@ export class CloudWorkerAgent {
       if (await this.cancelRequested(taskId)) {
         if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job cancellation.");
         await this.options.codeBuddy.stop(details.remoteJobId);
-        await this.options.control.update(taskId, "cancelled", { ...details, cancellation: "CodeBuddy stop requested by client" });
+        await this.options.control.update(taskId, "cancelled", { ...details, usage: usageSnapshot(details), cancellation: "CodeBuddy stop requested by client" });
         return;
       }
       if (details.deadlineAt && Date.parse(details.deadlineAt) <= Date.now()) {
         if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job timeout cancellation.");
         await this.options.codeBuddy.stop(details.remoteJobId);
-        await this.options.control.update(taskId, "failed", { ...details, error: "Task exceeded its configured runtime limit." });
+        await this.options.control.update(taskId, "failed", { ...details, usage: usageSnapshot(details), error: "Task exceeded its configured runtime limit." });
         return;
       }
       const job = await this.options.codeBuddy.getJob(details.remoteJobId);
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
       if (state === "running") {
-        await this.options.control.update(taskId, "running", details);
+        await this.options.control.update(taskId, "running", { ...details, usage: usageSnapshot(details, job) });
         await wait(this.pollMs, signal);
         continue;
       }
       if (state !== "succeeded") {
-        await this.options.control.update(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, remoteState: state });
+        await this.options.control.update(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, usage: usageSnapshot(details, job), remoteState: state });
         return;
       }
       const delivery = await this.deliver(taskId, projectId, details);
-      await this.options.control.update(taskId, "succeeded", { ...details, ...delivery });
+      await this.options.control.update(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery });
       return;
     }
   }
@@ -192,10 +193,36 @@ function permissionMode(profile: string | undefined): "default" | "acceptEdits" 
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 2_000) : "Unknown worker error."; }
 function jobDetails(result: Record<string, unknown> | undefined): JobDetails | undefined {
   if (!result) return undefined;
-  const { remoteJobId, worktreePath, baseSha, branch, deadlineAt } = result;
+  const { remoteJobId, worktreePath, baseSha, branch, deadlineAt, dispatchedAt, requestedModel } = result;
   return typeof remoteJobId === "string" && typeof worktreePath === "string" && typeof baseSha === "string" && typeof branch === "string"
-    ? { remoteJobId, worktreePath, baseSha, branch, ...(typeof deadlineAt === "string" ? { deadlineAt } : {}) }
+    ? { remoteJobId, worktreePath, baseSha, branch, ...(typeof deadlineAt === "string" ? { deadlineAt } : {}), ...(typeof dispatchedAt === "string" ? { dispatchedAt } : {}), ...(typeof requestedModel === "string" ? { requestedModel } : {}) }
     : undefined;
+}
+function usageSnapshot(details: JobDetails, job?: Record<string, unknown>): Record<string, string | number> {
+  const observedModel = stringAt(job, ["model"]) ?? stringAt(job, ["modelId"]) ?? stringAt(job, ["metadata", "model"]);
+  const started = details.dispatchedAt ? Date.parse(details.dispatchedAt) : Number.NaN;
+  return {
+    requestedModel: details.requestedModel ?? "unknown",
+    observedModel: observedModel ?? "unknown",
+    durationMs: Number.isFinite(started) ? Math.max(0, Date.now() - started) : "unknown",
+    inputTokens: numberAt(job, ["usage", "inputTokens"]) ?? numberAt(job, ["usage", "input_tokens"]) ?? numberAt(job, ["inputTokens"]) ?? "unknown",
+    outputTokens: numberAt(job, ["usage", "outputTokens"]) ?? numberAt(job, ["usage", "output_tokens"]) ?? numberAt(job, ["outputTokens"]) ?? "unknown",
+    credits: numberAt(job, ["usage", "credits"]) ?? numberAt(job, ["creditsUsed"]) ?? "unknown",
+  };
+}
+function stringAt(value: unknown, path: string[]): string | undefined {
+  const found = at(value, path); return typeof found === "string" && found ? found : undefined;
+}
+function numberAt(value: unknown, path: string[]): number | undefined {
+  const found = at(value, path); return typeof found === "number" && Number.isFinite(found) && found >= 0 ? found : undefined;
+}
+function at(value: unknown, path: string[]): unknown {
+  let current = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
 }
 function reconciledRetry(task: CloudTask): { priorBaseSha: string } | undefined {
   const reconciliation = task.result?.reconciliation;
