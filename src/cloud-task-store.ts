@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 
-export type CloudTaskState = "queued" | "leased" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
+export type CloudTaskState = "queued" | "leased" | "running" | "cancel_requested" | "succeeded" | "failed" | "cancelled" | "unknown";
 
 export interface CloudTask {
   taskId: string;
@@ -89,6 +89,47 @@ export class CloudTaskStore {
     return row ? taskFromRow(row) : undefined;
   }
 
+  list(input: { projectId?: string; state?: CloudTaskState; limit?: number } = {}): CloudTask[] {
+    const clauses: string[] = [];
+    const values: Array<string | number> = [];
+    if (input.projectId) { clauses.push("project_id = ?"); values.push(input.projectId); }
+    if (input.state) { clauses.push("state = ?"); values.push(input.state); }
+    values.push(input.limit ?? 50);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.db.prepare(`SELECT * FROM cloud_tasks ${where} ORDER BY created_at DESC LIMIT ?`).all(...values) as TaskRow[];
+    return rows.map(taskFromRow);
+  }
+
+  requestCancellation(taskId: string): CloudTask {
+    const current = this.require(taskId);
+    if (isTerminal(current.state)) return current;
+    const now = new Date().toISOString();
+    if (current.state === "queued") {
+      this.db.prepare("UPDATE cloud_tasks SET state = 'cancelled', updated_at = ? WHERE task_id = ?").run(now, taskId);
+    } else if (current.state === "leased" || current.state === "running" || current.state === "cancel_requested") {
+      this.db.prepare("UPDATE cloud_tasks SET state = 'cancel_requested', updated_at = ? WHERE task_id = ?").run(now, taskId);
+    } else {
+      throw new CloudTaskConflictError("An unknown task must be reconciled before it can be cancelled.");
+    }
+    return this.require(taskId);
+  }
+
+  resolveUnknown(taskId: string, action: "close" | "requeue", remoteJobConfirmedStopped: boolean): CloudTask {
+    const current = this.require(taskId);
+    if (current.state !== "unknown") throw new CloudTaskConflictError("Only an unknown task can be reconciled.");
+    if (!remoteJobConfirmedStopped) throw new CloudTaskConflictError("Confirm that the remote CodeBuddy job has stopped before reconciling an unknown task.");
+    const now = new Date().toISOString();
+    const result = { ...(current.result ?? {}), reconciliation: { action, remoteJobConfirmedStopped: true, resolvedAt: now } };
+    if (action === "close") {
+      this.db.prepare("UPDATE cloud_tasks SET state = 'cancelled', result_json = ?, updated_at = ? WHERE task_id = ?")
+        .run(JSON.stringify(result), now, taskId);
+    } else {
+      this.db.prepare("UPDATE cloud_tasks SET state = 'queued', lease_owner = NULL, lease_expires_at = NULL, result_json = ?, updated_at = ? WHERE task_id = ?")
+        .run(JSON.stringify(result), now, taskId);
+    }
+    return this.require(taskId);
+  }
+
   heartbeat(workerId: string, metadata?: Record<string, unknown>): CloudWorker {
     const lastSeenAt = new Date().toISOString();
     const metadataJson = metadata ? JSON.stringify(metadata) : null;
@@ -122,15 +163,29 @@ export class CloudTaskStore {
     if (current.workerId !== workerId || current.leaseOwner !== workerId) throw new Error("Worker does not own this task lease.");
     if (current.leaseExpiresAt && Date.parse(current.leaseExpiresAt) < Date.now()) throw new Error("Task lease has expired.");
     const now = new Date();
-    const terminal = state === "succeeded" || state === "failed" || state === "cancelled";
+    // A client cancellation wins over a late Worker heartbeat.  The Worker
+    // will read this state and stop its remote CodeBuddy job before reporting
+    // the terminal cancelled state.
+    const nextState = current.state === "cancel_requested" && state === "running" ? "cancel_requested" : state;
+    const terminal = isTerminal(nextState);
     const leaseExpiresAt = terminal ? null : new Date(now.getTime() + leaseMs).toISOString();
     this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
-      .run(state, result ? JSON.stringify(result) : null, leaseExpiresAt, now.toISOString(), taskId);
+      .run(nextState, result ? JSON.stringify(result) : null, leaseExpiresAt, now.toISOString(), taskId);
     return this.get(taskId)!;
   }
 
   close(): void { this.db.close(); }
+
+  private require(taskId: string): CloudTask {
+    const task = this.get(taskId);
+    if (!task) throw new Error("Unknown cloud task.");
+    return task;
+  }
 }
+
+export class CloudTaskConflictError extends Error {}
+
+function isTerminal(state: CloudTaskState): boolean { return state === "succeeded" || state === "failed" || state === "cancelled"; }
 
 function taskFromRow(row: TaskRow): CloudTask {
   return {

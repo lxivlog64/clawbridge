@@ -156,3 +156,35 @@ test("post-dispatch delivery failure reports unknown with job coordinates", asyn
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("Worker stops the accepted CodeBuddy job when cloud cancellation is requested", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-cancel-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let statusReads = 0;
+  let stoppedJob: string | undefined;
+  const control = {
+    ...controlFor(task, updates),
+    async workerTask() {
+      statusReads += 1;
+      return { ...task, state: statusReads === 1 ? "leased" as const : "cancel_requested" as const };
+    },
+  };
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() { throw new Error("Job should be stopped before polling its result."); },
+    async stop(id: string) { stoppedJob = id; return {}; },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control, codeBuddy, localWorker: healthyGit(), pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.equal(stoppedJob, "job-1");
+    assert.deepEqual(updates.map((update) => update.state), ["running", "cancelled"]);
+    assert.match(String(updates.at(-1)?.result?.cancellation), /stop requested/i);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

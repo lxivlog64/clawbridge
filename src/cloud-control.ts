@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
-import { CloudTaskStore } from "./cloud-task-store.js";
+import { CloudTaskConflictError, CloudTaskStore } from "./cloud-task-store.js";
 import type { ProjectRegistry } from "./project-registry.js";
 
 const taskInput = z.object({
@@ -13,6 +13,8 @@ const workerUpdate = z.object({
   result: z.record(z.string(), z.unknown()).optional(),
 }).strict();
 const heartbeatInput = z.object({ metadata: z.record(z.string(), z.unknown()).optional() }).strict();
+const reconcileInput = z.object({ action: z.enum(["close", "requeue"]), remoteJobConfirmedStopped: z.literal(true) }).strict();
+const listInput = z.object({ projectId: z.string().min(1).max(80).optional(), state: z.enum(["queued", "leased", "running", "cancel_requested", "succeeded", "failed", "cancelled", "unknown"]).optional(), limit: z.coerce.number().int().min(1).max(100).optional() });
 
 export interface CloudControlOptions {
   apiToken: string;
@@ -30,18 +32,26 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
       if (request.method === "GET" && url.pathname === "/health") return send(response, 200, { ok: true });
-      const client = url.pathname === "/v1/tasks" && request.method === "POST";
+      const client = url.pathname === "/v1/tasks" && (request.method === "POST" || request.method === "GET");
       const projectList = url.pathname === "/v1/projects" && request.method === "GET";
       const taskMatch = /^\/v1\/tasks\/([0-9a-f-]{36})$/i.exec(url.pathname);
       const eventMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/events$/i.exec(url.pathname);
+      const cancelMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/cancel$/i.exec(url.pathname);
+      const reconcileMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/reconcile$/i.exec(url.pathname);
       const workerMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/(heartbeat|claim)$/.exec(url.pathname);
+      const workerTaskMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/tasks\/([0-9a-f-]{36})$/i.exec(url.pathname);
 
-      if (client) {
+      if (client && request.method === "POST") {
         requireToken(request, options.apiToken);
         const input = taskInput.parse(await body(request));
         const project = options.projects.require(input.projectId);
         const created = options.tasks.createOrGet({ projectId: input.projectId, workerId: project.workerId, spec: input.spec, idempotencyKey: input.idempotencyKey, requestedModel: input.model ?? project.defaultModel });
         return send(response, 201, { ...created, task: publicTask(created.task) });
+      }
+      if (client && request.method === "GET") {
+        requireToken(request, options.apiToken);
+        const input = listInput.parse(Object.fromEntries(url.searchParams));
+        return send(response, 200, { tasks: options.tasks.list(input).map((task) => publicTask(task)) });
       }
       if (projectList) {
         requireToken(request, options.apiToken);
@@ -51,6 +61,17 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         requireToken(request, options.apiToken);
         const task = options.tasks.get(taskMatch[1]!);
         return task ? send(response, 200, { task: publicTask(task) }) : send(response, 404, { error: "Task not found." });
+      }
+      if (cancelMatch && request.method === "POST") {
+        requireToken(request, options.apiToken);
+        const task = options.tasks.requestCancellation(cancelMatch[1]!);
+        return send(response, 200, { task: publicTask(task) });
+      }
+      if (reconcileMatch && request.method === "POST") {
+        requireToken(request, options.apiToken);
+        const input = reconcileInput.parse(await body(request));
+        const task = options.tasks.resolveUnknown(reconcileMatch[1]!, input.action, input.remoteJobConfirmedStopped);
+        return send(response, 200, { task: publicTask(task) });
       }
       if (eventMatch && request.method === "POST") {
         const task = options.tasks.get(eventMatch[1]!);
@@ -71,9 +92,16 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
           return send(response, 200, { task: task ? publicTask(task, true) : null, leaseMs });
         }
       }
+      if (workerTaskMatch && request.method === "GET") {
+        const [, workerId, taskId] = workerTaskMatch;
+        requireWorker(request, workerId!, options.workerTokens);
+        const task = options.tasks.get(taskId!);
+        if (!task || task.workerId !== workerId) return send(response, 404, { error: "Task not found." });
+        return send(response, 200, { task: publicTask(task) });
+      }
       return send(response, 404, { error: "Not found." });
     } catch (error) {
-      const status = error instanceof AuthError ? 401 : error instanceof z.ZodError ? 400 : 500;
+      const status = error instanceof AuthError ? 401 : error instanceof z.ZodError ? 400 : error instanceof CloudTaskConflictError ? 409 : 500;
       return send(response, status, { error: error instanceof Error ? error.message : "Unknown error." });
     }
   });
