@@ -235,6 +235,9 @@ test("a review is bound to its delivery SHA and becomes stale when a PR head cha
     const stale = store.observeReviewHead(task.taskId, secondHead);
     assert.equal(stale.review?.status, "stale");
     assert.equal(stale.review?.observedHeadSha, secondHead);
+    assert.equal(store.listDeliverableEvents(100).filter((event) => event.kind === "task.review_stale").length, 1);
+    store.observeReviewHead(task.taskId, secondHead);
+    assert.equal(store.listDeliverableEvents(100).filter((event) => event.kind === "task.review_stale").length, 1, "rechecking the same stale review must not emit another notification");
     assert.throws(() => store.recordReview(task.taskId, { conclusion: "approved", reviewedHeadSha: secondHead }), /current delivery SHA/i);
   } finally {
     store.close();
