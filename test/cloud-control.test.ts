@@ -13,6 +13,24 @@ import { CloudWorkerAgent } from "../src/cloud-worker-agent.js";
 import type { CloudTask } from "../src/cloud-task-store.js";
 import type { RemoteCommandResult } from "../src/remote-worker.js";
 import { flushNotifications, WebhookNotifier } from "../src/notifier.js";
+import Database from "better-sqlite3";
+
+test("cloud state changes roll back when their outbox event cannot be written", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-atomic-outbox-"));
+  const databaseFile = path.join(directory, "cloud.sqlite");
+  const store = new CloudTaskStore(databaseFile);
+  try {
+    const task = store.createOrGet({ projectId: "sample", workerId: "worker-a", spec: "Atomic", idempotencyKey: "atomic-outbox-001" }).task;
+    const blocker = new Database(databaseFile);
+    blocker.exec("CREATE TRIGGER reject_event BEFORE INSERT ON cloud_task_events BEGIN SELECT RAISE(ABORT, 'event rejected'); END;");
+    blocker.close();
+    assert.throws(() => store.requestCancellation(task.taskId), /event rejected/);
+    assert.equal(store.get(task.taskId)?.state, "queued", "state must roll back with the failed event insert");
+  } finally {
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("cloud task events are durable, acknowledged only after delivery, and back off after a failure", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-events-"));
@@ -51,6 +69,10 @@ test("cloud claims enforce the configured per-project concurrency limit", async 
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, first.taskId);
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 }), undefined, "second task must remain queued while the project is active");
     store.updateFromWorker(first.taskId, "worker-a", "succeeded");
+    const completed = store.get(first.taskId)!;
+    assert.equal(completed.leaseOwner, undefined);
+    assert.equal(completed.leaseExpiresAt, undefined);
+    assert.throws(() => store.updateFromWorker(first.taskId, "worker-a", "running"), /does not own|cannot change/i);
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, second.taskId);
   } finally {
     store.close();
@@ -171,13 +193,14 @@ test("cloud control authenticates clients and leases a task only to its register
     assert.equal(claimed.task.spec, "Add a health endpoint");
 
     const updated = await json(await fetch(`${origin}/v1/tasks/${created.task.taskId}/events`, {
-      method: "POST", headers: auth("worker-token-which-is-long-enough"), body: JSON.stringify({ state: "succeeded", result: { commitSha: "a".repeat(40) } }),
+      method: "POST", headers: auth("worker-token-which-is-long-enough"), body: JSON.stringify({ state: "succeeded", result: { commitSha: "a".repeat(40), worktreePath: "/srv/projects/private-path" } }),
     }));
     assert.equal(updated.task.state, "succeeded");
 
     const status = await json(await fetch(`${origin}/v1/tasks/${created.task.taskId}`, { headers: auth("client-token-which-is-long-enough") }));
     assert.equal(status.task.state, "succeeded");
     assert.equal(status.task.result.commitSha, "a".repeat(40));
+    assert.equal("worktreePath" in status.task.result, false);
     assert.equal("spec" in status.task, false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -243,6 +266,9 @@ test("a review is bound to its delivery SHA and becomes stale when a PR head cha
     const stale = store.observeReviewHead(task.taskId, secondHead);
     assert.equal(stale.review?.status, "stale");
     assert.equal(stale.review?.observedHeadSha, secondHead);
+    assert.equal(store.listDeliverableEvents(100).filter((event) => event.kind === "task.review_stale").length, 1);
+    store.observeReviewHead(task.taskId, secondHead);
+    assert.equal(store.listDeliverableEvents(100).filter((event) => event.kind === "task.review_stale").length, 1, "rechecking the same stale review must not emit another notification");
     assert.throws(() => store.recordReview(task.taskId, { conclusion: "approved", reviewedHeadSha: secondHead }), /current delivery SHA/i);
   } finally {
     store.close();

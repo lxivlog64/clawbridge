@@ -74,6 +74,7 @@ export class CloudTaskStore implements NotificationOutbox {
   }
 
   createOrGet(input: { projectId: string; workerId: string; spec: string; idempotencyKey: string; requestedModel?: string }): { task: CloudTask; reused: boolean } {
+    return this.db.transaction(() => {
     const existing = this.db.prepare("SELECT * FROM cloud_tasks WHERE idempotency_key = ?").get(input.idempotencyKey) as TaskRow | undefined;
     const specHash = digest(input.spec);
     if (existing) {
@@ -94,7 +95,8 @@ export class CloudTaskStore implements NotificationOutbox {
       .run(task.taskId, task.idempotencyKey, task.projectId, task.workerId, task.spec, task.specHash,
         task.requestedModel ?? null, task.state, task.createdAt, task.updatedAt);
     this.emit(task, "task.queued", "任务已进入队列");
-    return { task, reused: false };
+      return { task, reused: false };
+    })();
   }
 
   get(taskId: string): CloudTask | undefined {
@@ -128,6 +130,7 @@ export class CloudTaskStore implements NotificationOutbox {
   }
 
   requestCancellation(taskId: string): CloudTask {
+    return this.db.transaction(() => {
     const current = this.require(taskId);
     if (isTerminal(current.state)) return current;
     const now = new Date().toISOString();
@@ -140,10 +143,12 @@ export class CloudTaskStore implements NotificationOutbox {
     }
     const task = this.require(taskId);
     if (task.state !== current.state) this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
-    return task;
+      return task;
+    })();
   }
 
   resolveUnknown(taskId: string, action: "close" | "requeue", remoteJobConfirmedStopped: boolean): CloudTask {
+    return this.db.transaction(() => {
     const current = this.require(taskId);
     if (current.state !== "unknown") throw new CloudTaskConflictError("Only an unknown task can be reconciled.");
     if (!remoteJobConfirmedStopped) throw new CloudTaskConflictError("Confirm that the remote CodeBuddy job has stopped before reconciling an unknown task.");
@@ -158,7 +163,8 @@ export class CloudTaskStore implements NotificationOutbox {
     }
     const task = this.require(taskId);
     this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
-    return task;
+      return task;
+    })();
   }
 
   heartbeat(workerId: string, metadata?: Record<string, unknown>, leaseMs = 90_000): CloudWorker {
@@ -208,6 +214,7 @@ export class CloudTaskStore implements NotificationOutbox {
   }
 
   updateFromWorker(taskId: string, workerId: string, state: Exclude<CloudTaskState, "queued" | "leased">, result?: Record<string, unknown>, leaseMs = 90_000): CloudTask {
+    return this.db.transaction(() => {
     const current = this.get(taskId);
     if (!current) throw new Error("Unknown cloud task.");
     if (current.workerId !== workerId || current.leaseOwner !== workerId) throw new Error("Worker does not own this task lease.");
@@ -217,15 +224,19 @@ export class CloudTaskStore implements NotificationOutbox {
     // will read this state and stop its remote CodeBuddy job before reporting
     // the terminal cancelled state.
     const nextState = current.state === "cancel_requested" && state === "running" ? "cancel_requested" : state;
-    const terminal = isTerminal(nextState);
-    const leaseExpiresAt = terminal ? null : new Date(now.getTime() + leaseMs).toISOString();
-    this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
-      .run(nextState, result ? JSON.stringify(result) : null, leaseExpiresAt, now.toISOString(), taskId);
+    if (!allowsWorkerTransition(current.state, nextState)) {
+      throw new CloudTaskConflictError(`Worker cannot change task state from ${current.state} to ${nextState}.`);
+    }
+    const releasesLease = isTerminal(nextState) || nextState === "unknown";
+    const leaseExpiresAt = releasesLease ? null : new Date(now.getTime() + leaseMs).toISOString();
+    this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_owner = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
+      .run(nextState, result ? JSON.stringify(result) : null, releasesLease ? null : workerId, leaseExpiresAt, now.toISOString(), taskId);
     let task = this.get(taskId)!;
     this.invalidateReviewIfHeadChanged(task);
     task = this.get(taskId)!;
     if (task.state !== current.state) this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
-    return task;
+      return task;
+    })();
   }
 
   listDeliverableEvents(limit: number): NotificationEvent[] {
@@ -250,6 +261,7 @@ export class CloudTaskStore implements NotificationOutbox {
   }
 
   recordReview(taskId: string, input: { conclusion: "approved" | "changes_requested"; comment?: string; reviewedHeadSha: string }): CloudTask {
+    return this.db.transaction(() => {
     const task = this.require(taskId);
     const headSha = headShaOf(task);
     if (task.state !== "succeeded" || !headSha) throw new CloudTaskConflictError("Only a delivered task with a verified head SHA can be reviewed.");
@@ -261,18 +273,22 @@ export class CloudTaskStore implements NotificationOutbox {
       .run(taskId, input.conclusion, input.comment ?? null, input.reviewedHeadSha, reviewedAt);
     const updated = this.require(taskId);
     this.emit(updated, "task.review_recorded", `审查结论：${input.conclusion}`);
-    return updated;
+      return updated;
+    })();
   }
 
   observeReviewHead(taskId: string, observedHeadSha: string): CloudTask {
+    return this.db.transaction(() => {
     const task = this.require(taskId);
     const review = task.review;
     if (!review || review.reviewedHeadSha === observedHeadSha) return task;
-    this.db.prepare("UPDATE cloud_task_reviews SET stale_at = ?, observed_head_sha = ? WHERE task_id = ? AND stale_at IS NULL")
-      .run(new Date().toISOString(), observedHeadSha, taskId);
+    const changed = this.db.prepare("UPDATE cloud_task_reviews SET stale_at = ?, observed_head_sha = ? WHERE task_id = ? AND stale_at IS NULL")
+      .run(new Date().toISOString(), observedHeadSha, taskId).changes;
+    if (changed !== 1) return this.require(taskId);
     const updated = this.require(taskId);
     this.emit(updated, "task.review_stale", "PR 有新提交，需重新审查");
-    return updated;
+      return updated;
+    })();
   }
 
   close(): void { this.db.close(); }
@@ -302,6 +318,12 @@ export class CloudTaskStore implements NotificationOutbox {
 export class CloudTaskConflictError extends Error {}
 
 function isTerminal(state: CloudTaskState): boolean { return state === "succeeded" || state === "failed" || state === "cancelled"; }
+function allowsWorkerTransition(current: CloudTaskState, next: CloudTaskState): boolean {
+  if (current === "leased") return next === "running" || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  if (current === "running") return next === "running" || next === "succeeded" || next === "failed" || next === "cancelled" || next === "unknown";
+  if (current === "cancel_requested") return next === "cancel_requested" || next === "cancelled" || next === "unknown";
+  return false;
+}
 
 function taskFromRow(row: TaskRow): CloudTask {
   return {
