@@ -83,7 +83,11 @@ export class CloudWorkerAgent {
       if (!preflight.ready) throw new Error(preflight.blockers.join(" "));
       if (signal?.aborted) return;
       const worker = this.options.projects.workerFor(project.id);
-      const prepared = await prepareWorktree(task.taskId, project, worker, this.localWorker, (candidate) => this.options.projects.allowsPath(project.id, candidate));
+      const prepared = await prepareWorktree(
+        task.taskId, project, worker, this.localWorker,
+        (candidate) => this.options.projects.allowsPath(project.id, candidate),
+        reconciledRetry(task),
+      );
       if (!prepared.ok) throw new Error(prepared.reason);
       if (await this.cancelRequested(task.taskId)) {
         await this.options.control.update(task.taskId, "cancelled", { cancellation: "cancelled before CodeBuddy dispatch" });
@@ -182,6 +186,14 @@ function jobDetails(result: Record<string, unknown> | undefined): JobDetails | u
   const { remoteJobId, worktreePath, baseSha, branch } = result;
   return typeof remoteJobId === "string" && typeof worktreePath === "string" && typeof baseSha === "string" && typeof branch === "string"
     ? { remoteJobId, worktreePath, baseSha, branch }
+    : undefined;
+}
+function reconciledRetry(task: CloudTask): { priorBaseSha: string } | undefined {
+  const reconciliation = task.result?.reconciliation;
+  if (!reconciliation || typeof reconciliation !== "object") return undefined;
+  const record = reconciliation as Record<string, unknown>;
+  return record.action === "requeue" && record.remoteJobConfirmedStopped === true && typeof task.result?.baseSha === "string"
+    ? { priorBaseSha: task.result.baseSha }
     : undefined;
 }
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
