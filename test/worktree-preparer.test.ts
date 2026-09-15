@@ -49,3 +49,41 @@ test("preparer refuses a dirty source repository before creating anything", asyn
   const result = await prepareWorktree("123e4567-e89b-12d3-a456-426614174000", project, worker, remote, () => true);
   assert.deepEqual(result, { ok: false, reason: "Registered remote repository has uncommitted changes; handoff is required." });
 });
+
+test("a confirmed reconciled retry removes only a clean, uncommitted stale worktree", async () => {
+  const calls: Array<{ cwd: string; args: string[] }> = [];
+  const taskId = "123e4567-e89b-12d3-a456-426614174000";
+  const worktreePath = `/srv/projects/app.clawbridge-worktrees/${taskId}`;
+  const remote = {
+    async git(_worker: RegisteredWorker, cwd: string, args: string[]) {
+      calls.push({ cwd, args });
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return success("true\n");
+      if (args[0] === "status") return success();
+      if (args[0] === "fetch") return success();
+      if (args[0] === "rev-parse" && args[1] === "origin/main") return success(`${"b".repeat(40)}\n`);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return success(`${"a".repeat(40)}\n`);
+      return success();
+    },
+    async mkdir() { return success(); },
+  };
+  const result = await prepareWorktree(taskId, project, worker, remote, () => true, { priorBaseSha: "a".repeat(40) });
+  assert.equal(result.ok, true);
+  assert.ok(calls.some((call) => call.cwd === "/srv/projects/app" && call.args.join(" ") === `worktree remove ${worktreePath}`));
+  assert.ok(calls.some((call) => call.cwd === "/srv/projects/app" && call.args.join(" ") === `branch -D clawbridge/${taskId}`));
+});
+
+test("a reconciled retry preserves a stale worktree with commits", async () => {
+  const remote = {
+    async git(_worker: RegisteredWorker, _cwd: string, args: string[]) {
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return success("true\n");
+      if (args[0] === "status") return success();
+      if (args[0] === "fetch") return success();
+      if (args[0] === "rev-parse" && args[1] === "origin/main") return success(`${"b".repeat(40)}\n`);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return success(`${"c".repeat(40)}\n`);
+      throw new Error("a worktree with commits must not be removed");
+    },
+    async mkdir() { return success(); },
+  };
+  const result = await prepareWorktree("123e4567-e89b-12d3-a456-426614174000", project, worker, remote, () => true, { priorBaseSha: "a".repeat(40) });
+  assert.deepEqual(result, { ok: false, reason: "Reconciled task worktree has commits beyond its original base; preserve or inspect it before retrying." });
+});
