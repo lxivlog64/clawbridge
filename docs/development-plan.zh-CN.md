@@ -1,13 +1,13 @@
-# ClawBridge 通用异步开发平台：开发规格
+# 鲁班通用异步开发平台：开发规格
 
 版本：草案 v1.1
 日期：2026-09-15
-适用范围：从现有 ClawBridge MCP 桥接器升级，支持多项目、多执行节点和 GitHub PR 交付。
+适用范围：从现有鲁班 MCP 桥接器升级，支持多项目、多执行节点和 GitHub PR 交付。
 状态：本地/SSH 交付链（M0–M5）已实现；M3 已在真实 Linux Worker、GitHub 草稿 PR 与 Codex 固定 SHA 审查中验证。云端控制平面（M6）已部署到 Ubuntu VPS，私有 Linux Worker 通过出站 HTTPS 领取任务；基础派发、草稿 PR 交付、任务列表、取消请求与 `unknown` 人工处置均已实现。尚未完成无人值守故障演练、云端通知、用量与资源限制执行、多 Worker 验收等后续项。
 
 ## 1. 目标与约束
 
-用户在 Codex 中描述需求，ClawBridge 将任务交给 CodeBuddy Code 后台执行。CodeBuddy 自行阅读项目、开发、测试并提交草稿 PR；用户需要验收时，Codex 获取精简交付信息和实际代码差异进行审查。
+用户在 Codex 中描述需求，鲁班将任务交给 CodeBuddy Code 后台执行。CodeBuddy 自行阅读项目、开发、测试并提交草稿 PR；用户需要验收时，Codex 获取精简交付信息和实际代码差异进行审查。
 
 目标：
 
@@ -20,7 +20,7 @@
 约束：
 
 - 免费积分、可选模型及计费规则由服务方决定，禁止承诺永久免费或固定节省比例。
-- ClawBridge 不购买积分、不自动切换到付费账号、不绕过服务方配额。
+- 鲁班不购买积分、不自动切换到付费账号、不绕过服务方配额。
 - 不自动合并、发布 Release、部署或操作生产资源。
 - 通用实现不得硬编码个人目录、局域网地址、DJOneHub/AiMiShu 项目名。
 - 信任目录和提示词不是操作系统隔离；强隔离使用专用用户或容器。
@@ -261,7 +261,7 @@ GitHub 身份可采用专用机器账号或 GitHub App；不要给执行节点�
 - M0：已实现并验证 SSH/MCP/Gateway 连通性；包含 API 兼容、超时与响应限制、受限 transcript、Linux SSH 启动兼容和短控制 socket 路径。
 - M1：已实现项目登记、静态预检、SQLite 台账、幂等创建、状态与事件查询。
 - M2：已实现受限远端 worktree 准备、固定 base SHA、源工作区干净检查、分支隔离和不确定回执保留；真实 M3 演练证明默认分支未被任务修改。
-- M3：已实现并真实验证。任务仅在隔离 worktree 提交，ClawBridge 校验 SHA 并非强制推送任务分支，创建草稿 PR 后由 Codex 对固定 SHA 审查。
+- M3：已实现并真实验证。任务仅在隔离 worktree 提交，鲁班校验 SHA 并非强制推送任务分支，创建草稿 PR 后由 Codex 对固定 SHA 审查。
 - M4：代码已实现 SQLite outbox、协调器、Webhook 重试和用户服务安装脚本；真实“退出 Codex、运行中重启 Worker/VPS 后恢复、Webhook 失败重试”验收仍待完成。当前云端控制平面尚未接入该通知 outbox。
 - M5：本地链路已实现精简结果、固定 SHA 审查上下文、审查记录与 HEAD 失效检查；真实 M3 草稿 PR 已完成一次 Codex 审查。云端仍只返回交付 SHA/草稿 PR，尚未提供同等审查上下文；用量指标与自动修复轮次执行仍待增强。
 - M6：VPS 控制 API、Token 鉴权、Worker 心跳/租约领取/状态回传、本地 Worker 执行器及 Mac 云端 MCP 已部署。Worker 在远端 jobId 产生前的预检/worktree/派发失败记为 `failed`；jobId 已被接受后的轮询、交付校验、推送或创建 PR 异常记为 `unknown`，保留 remoteJobId、worktreePath、baseSha、branch 与简短错误，不自动重派。Ubuntu VPS、TLS 反向代理、私有 Worker 出站领取，以及自动创建草稿 PR 已真实验收。云端任务列表、取消请求和 `unknown` 的显式关闭/重新入队已实现并通过自动化测试；尚未对真实运行中的 CodeBuddy 任务进行取消和恢复演练。

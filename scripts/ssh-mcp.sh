@@ -10,7 +10,7 @@ remote_codebuddy="${CLAWBRIDGE_REMOTE_CODEBUDDY:-codebuddy}"
 ssh_port="${CLAWBRIDGE_SSH_PORT:-22}"
 user_id="$(id -u)"
 case "$local_port:$remote_port:$ssh_port" in
-  *[!0-9:]*|:*|*::*|*:) echo "ClawBridge ports must be numeric." >&2; exit 1 ;;
+  *[!0-9:]*|:*|*::*|*:) echo "Luban ports must be numeric." >&2; exit 1 ;;
 esac
 instance_material="${CLAWBRIDGE_INSTANCE:-${ssh_host}-${ssh_port}-${local_port}-${remote_port}}"
 instance_key="$(printf '%s' "$instance_material" | cksum | awk '{print $1}')"
@@ -26,7 +26,7 @@ attempt=0
 while ! mkdir "$lock_dir" 2>/dev/null; do
   attempt=$((attempt + 1))
   if [ "$attempt" -ge 100 ]; then
-    echo "Timed out waiting for another ClawBridge startup." >&2
+    echo "Timed out waiting for another Luban startup." >&2
     exit 1
   fi
   sleep 1

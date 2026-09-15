@@ -43,7 +43,7 @@ EOF
     mkdir -p "$unit_dir"
     cat > "$unit" <<EOF
 [Unit]
-Description=ClawBridge coordinator
+Description=Luban coordinator
 After=network-online.target
 
 [Service]

@@ -5,7 +5,7 @@ script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 if [ -n "${CLAWBRIDGE_SERVICE_ENV_FILE:-}" ]; then
   if [ ! -r "$CLAWBRIDGE_SERVICE_ENV_FILE" ]; then
-    echo "ClawBridge coordinator environment file is not readable." >&2
+    echo "Luban coordinator environment file is not readable." >&2
     exit 1
   fi
   # This is a user-owned private environment file; do not place untrusted input in it.

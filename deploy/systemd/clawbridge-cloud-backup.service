@@ -1,5 +1,5 @@
 [Unit]
-Description=ClawBridge cloud SQLite backup
+Description=Luban cloud SQLite backup
 After=clawbridge-cloud.service
 
 [Service]

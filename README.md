@@ -1,20 +1,22 @@
-# ClawBridge
+# 鲁班（Luban）
 
 [English](README.en.md) | 简体中文
 
-ClawBridge 是一个 MCP 桥接器，让 Codex 把边界清晰的开发任务交给另一台电脑上的 CodeBuddy Code，指定模型与思考强度，等待任务完成，再由 Codex 获取结果并审查 Git 变更。
+鲁班是一个 MCP 异步开发桥接器，让 Codex 把边界清晰的开发任务交给另一台电脑上的 CodeBuddy Code，指定模型与思考强度，等待任务完成，再由 Codex 获取结果并审查 Git 变更。
 
-> ClawBridge 是社区项目，与 OpenAI、腾讯、CodeBuddy 或 WorkBuddy 官方无隶属或背书关系。
+> 鲁班是社区项目，与 OpenAI、腾讯、CodeBuddy 或 WorkBuddy 官方无隶属或背书关系。
+>
+> 为兼容现有安装，命令、MCP 工具、环境变量、服务名和仓库地址暂时保留 `clawbridge` 技术标识。
 
 典型架构：
 
 ```text
-Codex ──MCP──> ClawBridge ──SSH 隧道──> CodeBuddy Code ──> 独立 worktree
+Codex ──MCP──> 鲁班 ──SSH 隧道──> CodeBuddy Code ──> 独立 worktree
   │                                                        │
   └────────────────── 审查 commit、diff 与测试结果 <──────┘
 ```
 
-## 为什么使用 ClawBridge
+## 为什么使用鲁班
 
 - Codex 负责需求、规格和最终审查，CodeBuddy 作为独立开发 Agent。
 - CodeBuddy 任务可逐次指定 `model`、`effort`、权限模式和 Git worktree。
@@ -24,17 +26,17 @@ Codex ──MCP──> ClawBridge ──SSH 隧道──> CodeBuddy Code ──>
 
 ## 免费积分说明
 
-腾讯官方定价页注明：**CodeBuddy 与 WorkBuddy 使用同一账号时积分共享，无需分别订阅**。个人体验版目前可免费使用并包含每月体验积分，因此可用 WorkBuddy/CodeBuddy 账号已有的免费积分运行 ClawBridge。
+腾讯官方定价页注明：**CodeBuddy 与 WorkBuddy 使用同一账号时积分共享，无需分别订阅**。个人体验版目前可免费使用并包含每月体验积分，因此可用 WorkBuddy/CodeBuddy 账号已有的免费积分运行鲁班。
 
-免费额度、可选模型、积分倍率和活动可能随时调整；ClawBridge 不提供或转售积分，也不保证永久免费。请始终以[官方定价页](https://www.codebuddy.cn/docs/ide/Account/pricing)和产品内显示为准。
+免费额度、可选模型、积分倍率和活动可能随时调整；鲁班不提供或转售积分，也不保证永久免费。请始终以[官方定价页](https://www.codebuddy.cn/docs/ide/Account/pricing)和产品内显示为准。
 
 ## 工作方式
 
 1. Codex 编写开发规格和验收条件。
-2. Codex 调用 ClawBridge，在 CodeBuddy 机器上派发后台任务。
+2. Codex 调用鲁班，在 CodeBuddy 机器上派发后台任务。
 3. CodeBuddy 使用指定模型在独立 worktree 中实现和测试。
 4. Codex 查询状态、读取回传记录，并验证 commit、diff 和测试。
-5. 是否合并始终由用户决定；ClawBridge 不会自动合并代码。
+5. 是否合并始终由用户决定；鲁班不会自动合并代码。
 
 ## 环境要求
 
@@ -119,7 +121,7 @@ Host codebuddy-worker
     IdentityFile ~/.ssh/your-key
 ```
 
-构建 ClawBridge 后，登记远程启动器：
+构建鲁班后，登记远程启动器：
 
 ```bash
 export CLAWBRIDGE_SSH_HOST=codebuddy-worker
@@ -136,7 +138,7 @@ codex mcp add clawbridge --env CLAWBRIDGE_SSH_HOST="$CLAWBRIDGE_SSH_HOST" \
 
 - 将本机 `127.0.0.1:18080` 转发到远端 `127.0.0.1:8080`；
 - 通过 SSH 临时读取 Gateway 密码；
-- 把密码仅放入 ClawBridge 进程环境，不写入项目文件。
+- 把密码仅放入鲁班进程环境，不写入项目文件。
 - 使用 SSH 批处理、连接超时与启动锁，避免多个同实例启动器互相抢占。
 
 所有远程选项见[完整配置指南](docs/configuration.zh-CN.md)。
@@ -147,15 +149,15 @@ codex mcp add clawbridge --env CLAWBRIDGE_SSH_HOST="$CLAWBRIDGE_SSH_HOST" \
 
 ### 多个执行节点
 
-多个 CodeBuddy 电脑需要分别登记不同的 MCP 名称，并为每个实例设置唯一的 `CLAWBRIDGE_LOCAL_PORT` 和 `CLAWBRIDGE_INSTANCE`。例如 `clawbridge-dev`、`clawbridge-test`。完整命令见[多实例配置](docs/configuration.zh-CN.md#配置多个-clawbridge)。
+多个 CodeBuddy 电脑需要分别登记不同的 MCP 名称，并为每个实例设置唯一的 `CLAWBRIDGE_LOCAL_PORT` 和 `CLAWBRIDGE_INSTANCE`。例如 `clawbridge-dev`、`clawbridge-test`。完整命令见[多实例配置](docs/configuration.zh-CN.md#配置多个鲁班执行节点)。
 
-同一台 CodeBuddy 电脑上的多个项目不需要多个 ClawBridge；派发时使用不同的远端 `cwd` 即可。
+同一台 CodeBuddy 电脑上的多个项目不需要多个鲁班执行节点；派发时使用不同的远端 `cwd` 即可。
 
 ## 在 Codex 中使用
 
 重新加载 Codex 后，可以这样描述任务：
 
-> 使用 ClawBridge，让远端 CodeBuddy 在 `/home/user/workspaces/my-app` 中使用 `glm-5.3`、`high` 思考强度和独立 worktree 实现登录限流；完成后读取结果，并审查实际 Git diff 和测试。
+> 使用鲁班，让远端 CodeBuddy 在 `/home/user/workspaces/my-app` 中使用 `glm-5.3`、`high` 思考强度和独立 worktree 实现登录限流；完成后读取结果，并审查实际 Git diff 和测试。
 
 可用 MCP 工具：
 

@@ -19,7 +19,7 @@ const codeBuddy = new CodeBuddyClient(config);
 const projects = ProjectRegistry.load(config.projectsFile);
 const tasks = new TaskStore(config.taskDatabaseFile);
 const remoteWorker = new RemoteWorker();
-const server = new McpServer({ name: "clawbridge", version: "0.1.0" });
+const server = new McpServer({ name: "luban", version: "0.1.0" });
 const gitRef = z
   .string()
   .min(1)
@@ -40,7 +40,7 @@ const executionState = z.enum([
 
 server.tool(
   "clawbridge_projects",
-  "List registered ClawBridge projects. Credential references, filesystem allowlists, and secrets are never returned.",
+  "List registered Luban projects. Credential references, filesystem allowlists, and secrets are never returned.",
   {},
   async () => json({ projects: projects.list() }),
 );
@@ -100,7 +100,7 @@ server.tool(
     try {
       const job = await codeBuddy.dispatchJob({
         cwd: prepared.worktreePath,
-        prompt: `ClawBridge task ${taskId}\nBase SHA: ${prepared.baseSha}\nTask branch: ${prepared.branch}\n\n${spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Commit the completed work and report exact test commands and commit SHA.`,
+        prompt: `Luban task ${taskId}\nBase SHA: ${prepared.baseSha}\nTask branch: ${prepared.branch}\n\n${spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Commit the completed work and report exact test commands and commit SHA.`,
         model: task.requestedModel,
         effort,
         permissionMode: permissionMode(project.permissionProfile),
@@ -317,7 +317,7 @@ server.tool(
 
 server.tool(
   "clawbridge_events",
-  "Read durable ClawBridge task events. Events form a local notification outbox and contain only a short status summary.",
+  "Read durable Luban task events. Events form a local notification outbox and contain only a short status summary.",
   { pendingOnly: z.boolean().default(true), limit: z.number().int().min(1).max(100).default(20) },
   async ({ pendingOnly, limit }) => json({ events: tasks.listEvents(limit, pendingOnly) }),
 );

@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily ClawBridge cloud SQLite backup
+Description=Daily Luban cloud SQLite backup
 
 [Timer]
 OnCalendar=*-*-* 03:17:00 UTC

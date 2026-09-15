@@ -1,11 +1,11 @@
 ---
 name: clawbridge-delegation
-description: Delegate a bounded Git implementation task through ClawBridge to CodeBuddy Code or enterprise WorkBuddy, then verify and review the returned commit before accepting it.
+description: Delegate a bounded Git implementation task through Luban to CodeBuddy Code or enterprise WorkBuddy, then verify and review the returned commit before accepting it.
 ---
 
-# ClawBridge Delegation
+# 鲁班委派
 
-Use ClawBridge for implementation only when the task is bounded, testable, and suitable for a separate Git branch. Keep architecture, acceptance criteria, and final review with Codex.
+Use Luban for implementation only when the task is bounded, testable, and suitable for a separate Git branch. Keep architecture, acceptance criteria, and final review with Codex.
 
 Prefer the CodeBuddy Code transport for personal developers. It supports explicit `model`, `effort`, and isolated worktrees without WorkBuddy enterprise hardware-access approval. Use the WorkBuddy Open API transport only when the user has an enabled enterprise third-party application.
 

@@ -69,11 +69,11 @@ export class ProjectRegistry {
     try {
       parsed = JSON.parse(fs.readFileSync(sourceFile, "utf8"));
     } catch (error) {
-      throw new Error(`Cannot read ClawBridge project registry ${sourceFile}: ${message(error)}`);
+      throw new Error(`Cannot read Luban project registry ${sourceFile}: ${message(error)}`);
     }
     const result = registrySchema.safeParse(parsed);
     if (!result.success) {
-      throw new Error(`Invalid ClawBridge project registry ${sourceFile}: ${result.error.issues.map((issue) => issue.message).join("; ")}`);
+      throw new Error(`Invalid Luban project registry ${sourceFile}: ${result.error.issues.map((issue) => issue.message).join("; ")}`);
     }
     return new ProjectRegistry(
       new Map(result.data.projects.map((project) => [project.id, project])),
