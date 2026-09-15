@@ -20,7 +20,9 @@ export interface CloudTask {
   leaseOwner?: string;
   leaseExpiresAt?: string;
   result?: Record<string, unknown>;
+  review?: CloudReview;
 }
+export interface CloudReview { conclusion: "approved" | "changes_requested"; comment?: string; reviewedHeadSha: string; reviewedAt: string; status: "current" | "stale"; observedHeadSha?: string; }
 
 export interface CloudWorker {
   workerId: string;
@@ -64,6 +66,10 @@ export class CloudTaskStore implements NotificationOutbox {
         created_at TEXT NOT NULL, delivered_at TEXT, attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT
       );
       CREATE INDEX IF NOT EXISTS cloud_task_events_delivery ON cloud_task_events(delivered_at, next_attempt_at, created_at);
+      CREATE TABLE IF NOT EXISTS cloud_task_reviews (
+        task_id TEXT PRIMARY KEY, conclusion TEXT NOT NULL, comment TEXT, reviewed_head_sha TEXT NOT NULL,
+        reviewed_at TEXT NOT NULL, stale_at TEXT, observed_head_sha TEXT
+      );
     `);
   }
 
@@ -93,7 +99,7 @@ export class CloudTaskStore implements NotificationOutbox {
 
   get(taskId: string): CloudTask | undefined {
     const row = this.db.prepare("SELECT * FROM cloud_tasks WHERE task_id = ?").get(taskId) as TaskRow | undefined;
-    return row ? taskFromRow(row) : undefined;
+    return row ? this.withReview(taskFromRow(row)) : undefined;
   }
 
   list(input: { projectId?: string; state?: CloudTaskState; limit?: number } = {}): CloudTask[] {
@@ -104,7 +110,7 @@ export class CloudTaskStore implements NotificationOutbox {
     values.push(input.limit ?? 50);
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db.prepare(`SELECT * FROM cloud_tasks ${where} ORDER BY created_at DESC LIMIT ?`).all(...values) as TaskRow[];
-    return rows.map(taskFromRow);
+    return rows.map((row) => this.withReview(taskFromRow(row)));
   }
 
   requestCancellation(taskId: string): CloudTask {
@@ -201,7 +207,9 @@ export class CloudTaskStore implements NotificationOutbox {
     const leaseExpiresAt = terminal ? null : new Date(now.getTime() + leaseMs).toISOString();
     this.db.prepare(`UPDATE cloud_tasks SET state = ?, result_json = ?, lease_expires_at = ?, updated_at = ? WHERE task_id = ?`)
       .run(nextState, result ? JSON.stringify(result) : null, leaseExpiresAt, now.toISOString(), taskId);
-    const task = this.get(taskId)!;
+    let task = this.get(taskId)!;
+    this.invalidateReviewIfHeadChanged(task);
+    task = this.get(taskId)!;
     if (task.state !== current.state) this.emit(task, "task.state_changed", `${current.state} → ${task.state}`);
     return task;
   }
@@ -227,6 +235,32 @@ export class CloudTaskStore implements NotificationOutbox {
       .run(row.attempts + 1, new Date(Date.now() + delayMs).toISOString(), eventId);
   }
 
+  recordReview(taskId: string, input: { conclusion: "approved" | "changes_requested"; comment?: string; reviewedHeadSha: string }): CloudTask {
+    const task = this.require(taskId);
+    const headSha = headShaOf(task);
+    if (task.state !== "succeeded" || !headSha) throw new CloudTaskConflictError("Only a delivered task with a verified head SHA can be reviewed.");
+    if (headSha !== input.reviewedHeadSha) throw new CloudTaskConflictError("The submitted review SHA is not the task's current delivery SHA.");
+    const reviewedAt = new Date().toISOString();
+    this.db.prepare(`INSERT INTO cloud_task_reviews (task_id, conclusion, comment, reviewed_head_sha, reviewed_at, stale_at, observed_head_sha)
+      VALUES (?, ?, ?, ?, ?, NULL, NULL)
+      ON CONFLICT(task_id) DO UPDATE SET conclusion=excluded.conclusion, comment=excluded.comment, reviewed_head_sha=excluded.reviewed_head_sha, reviewed_at=excluded.reviewed_at, stale_at=NULL, observed_head_sha=NULL`)
+      .run(taskId, input.conclusion, input.comment ?? null, input.reviewedHeadSha, reviewedAt);
+    const updated = this.require(taskId);
+    this.emit(updated, "task.review_recorded", `审查结论：${input.conclusion}`);
+    return updated;
+  }
+
+  observeReviewHead(taskId: string, observedHeadSha: string): CloudTask {
+    const task = this.require(taskId);
+    const review = task.review;
+    if (!review || review.reviewedHeadSha === observedHeadSha) return task;
+    this.db.prepare("UPDATE cloud_task_reviews SET stale_at = ?, observed_head_sha = ? WHERE task_id = ? AND stale_at IS NULL")
+      .run(new Date().toISOString(), observedHeadSha, taskId);
+    const updated = this.require(taskId);
+    this.emit(updated, "task.review_stale", "PR 有新提交，需重新审查");
+    return updated;
+  }
+
   close(): void { this.db.close(); }
 
   private require(taskId: string): CloudTask {
@@ -238,6 +272,16 @@ export class CloudTaskStore implements NotificationOutbox {
   private emit(task: CloudTask, kind: string, summary: string): void {
     this.db.prepare("INSERT INTO cloud_task_events (event_id, task_id, kind, summary, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(crypto.randomUUID(), task.taskId, kind, summary, new Date().toISOString());
+  }
+
+  private withReview(task: CloudTask): CloudTask {
+    const row = this.db.prepare("SELECT conclusion, comment, reviewed_head_sha, reviewed_at, stale_at, observed_head_sha FROM cloud_task_reviews WHERE task_id = ?").get(task.taskId) as { conclusion: "approved" | "changes_requested"; comment: string | null; reviewed_head_sha: string; reviewed_at: string; stale_at: string | null; observed_head_sha: string | null } | undefined;
+    return row ? { ...task, review: { conclusion: row.conclusion, ...(row.comment ? { comment: row.comment } : {}), reviewedHeadSha: row.reviewed_head_sha, reviewedAt: row.reviewed_at, status: row.stale_at ? "stale" : "current", ...(row.observed_head_sha ? { observedHeadSha: row.observed_head_sha } : {}) } } : task;
+  }
+
+  private invalidateReviewIfHeadChanged(task: CloudTask): void {
+    const head = headShaOf(task);
+    if (head) this.observeReviewHead(task.taskId, head);
   }
 }
 
@@ -256,3 +300,4 @@ function taskFromRow(row: TaskRow): CloudTask {
 }
 
 function digest(value: string): string { return crypto.createHash("sha256").update(value).digest("hex"); }
+function headShaOf(task: CloudTask): string | undefined { const value = task.result?.headSha; return typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value : undefined; }

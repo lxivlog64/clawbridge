@@ -46,6 +46,24 @@ server.tool(
 );
 
 server.tool(
+  "clawbridge_cloud_review_record",
+  "Record a Codex review conclusion against the delivered PR's exact head SHA. A later PR commit invalidates this conclusion.",
+  { taskId: z.string().uuid(), conclusion: z.enum(["approved", "changes_requested"]), reviewedHeadSha: z.string().regex(/^[0-9a-f]{40}$/i), comment: z.string().min(1).max(10_000).optional() },
+  async ({ taskId, conclusion, reviewedHeadSha, comment }) => json({ task: await client.recordReview(taskId, { conclusion, reviewedHeadSha, comment }) }),
+);
+
+server.tool(
+  "clawbridge_cloud_review_status",
+  "Read the review record and check the public GitHub PR head. If a new commit is found, the stored conclusion becomes stale and must be redone. Private or unavailable GitHub PRs remain unchecked rather than guessed.",
+  { taskId: z.string().uuid() },
+  async ({ taskId }) => {
+    const task = await client.reviewStatus(taskId);
+    if (!task) throw new Error(`Unknown cloud task ${taskId}.`);
+    return json({ task });
+  },
+);
+
+server.tool(
   "clawbridge_cloud_status",
   "Read a cloud task's compact state, Worker assignment, and verified delivery facts. The full task specification is not returned.",
   { taskId: z.string().uuid() },
