@@ -17,6 +17,27 @@ export class CloudControlClient {
     catch (error) { if (error instanceof CloudApiError && error.status === 404) return undefined; throw error; }
   }
 
+  async tasks(input: { projectId?: string; state?: CloudTaskState; limit?: number } = {}): Promise<CloudTask[]> {
+    const query = new URLSearchParams();
+    if (input.projectId) query.set("projectId", input.projectId);
+    if (input.state) query.set("state", input.state);
+    if (input.limit) query.set("limit", String(input.limit));
+    return (await this.request<{ tasks: CloudTask[] }>(`/v1/tasks${query.size ? `?${query}` : ""}`, {})).tasks;
+  }
+
+  async cancel(taskId: string): Promise<CloudTask> {
+    return (await this.request<{ task: CloudTask }>(`/v1/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST", body: "{}" })).task;
+  }
+
+  async reconcile(taskId: string, action: "close" | "requeue"): Promise<CloudTask> {
+    return (await this.request<{ task: CloudTask }>(`/v1/tasks/${encodeURIComponent(taskId)}/reconcile`, { method: "POST", body: JSON.stringify({ action, remoteJobConfirmedStopped: true }) })).task;
+  }
+
+  async workerTask(workerId: string, taskId: string): Promise<CloudTask | undefined> {
+    try { return (await this.request<{ task: CloudTask }>(`/v1/workers/${encodeURIComponent(workerId)}/tasks/${encodeURIComponent(taskId)}`, {})).task; }
+    catch (error) { if (error instanceof CloudApiError && error.status === 404) return undefined; throw error; }
+  }
+
   async heartbeat(workerId: string, metadata?: Record<string, unknown>): Promise<void> {
     await this.request(`/v1/workers/${encodeURIComponent(workerId)}/heartbeat`, { method: "POST", body: JSON.stringify({ ...(metadata ? { metadata } : {}) }) });
   }

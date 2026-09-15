@@ -6,8 +6,8 @@ import type { ProjectRegistry } from "./project-registry.js";
 import { LocalWorker } from "./remote-worker.js";
 import { prepareWorktree, type GitPreparerRemote } from "./worktree-preparer.js";
 
-type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "update">;
-type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob">;
+type CloudControlGateway = Pick<CloudControlClient, "heartbeat" | "claim" | "update"> & Partial<Pick<CloudControlClient, "workerTask">>;
+type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob"> & Partial<Pick<CodeBuddyClient, "stop">>;
 interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
 }
@@ -61,6 +61,10 @@ export class CloudWorkerAgent {
       const worker = this.options.projects.workerFor(project.id);
       const prepared = await prepareWorktree(task.taskId, project, worker, this.localWorker, (candidate) => this.options.projects.allowsPath(project.id, candidate));
       if (!prepared.ok) throw new Error(prepared.reason);
+      if (await this.cancelRequested(task.taskId)) {
+        await this.options.control.update(task.taskId, "cancelled", { cancellation: "cancelled before CodeBuddy dispatch" });
+        return;
+      }
       const job = await this.options.codeBuddy.dispatchJob({
         cwd: prepared.worktreePath,
         prompt: developmentPrompt(task, prepared.baseSha, prepared.branch),
@@ -85,6 +89,12 @@ export class CloudWorkerAgent {
 
   private async awaitCompletion(taskId: string, projectId: string, details: JobDetails): Promise<void> {
     while (true) {
+      if (await this.cancelRequested(taskId)) {
+        if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job cancellation.");
+        await this.options.codeBuddy.stop(details.remoteJobId);
+        await this.options.control.update(taskId, "cancelled", { ...details, cancellation: "CodeBuddy stop requested by client" });
+        return;
+      }
       const job = await this.options.codeBuddy.getJob(details.remoteJobId);
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
       if (state === "running") {
@@ -100,6 +110,12 @@ export class CloudWorkerAgent {
       await this.options.control.update(taskId, "succeeded", { ...details, ...delivery });
       return;
     }
+  }
+
+  private async cancelRequested(taskId: string): Promise<boolean> {
+    return this.options.control.workerTask
+      ? (await this.options.control.workerTask(this.options.workerId, taskId))?.state === "cancel_requested"
+      : false;
   }
 
   private async deliver(taskId: string, projectId: string, details: { worktreePath: string; baseSha: string; branch: string }): Promise<{ headSha: string; prUrl: string }> {

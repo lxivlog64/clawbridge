@@ -109,7 +109,10 @@ test("cloud MCP publishes submit, status, and read-only projects tools", async (
   await client.connect(transport);
   try {
     const tools = await client.listTools();
-    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), ["clawbridge_cloud_projects", "clawbridge_cloud_status", "clawbridge_cloud_submit"]);
+    assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+      "clawbridge_cloud_cancel", "clawbridge_cloud_projects", "clawbridge_cloud_reconcile_unknown",
+      "clawbridge_cloud_status", "clawbridge_cloud_submit", "clawbridge_cloud_tasks",
+    ]);
 
     const result = await client.callTool({ name: "clawbridge_cloud_projects", arguments: {} });
     const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
@@ -122,6 +125,53 @@ test("cloud MCP publishes submit, status, and read-only projects tools", async (
     assert.equal(text.includes("/srv/projects"), false);
   } finally {
     await client.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    store.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cloud control lists tasks, coordinates cancellation, and requires an explicit unknown reconciliation", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-cloud-reconcile-"));
+  const registryFile = path.join(directory, "projects.json");
+  await fs.writeFile(registryFile, JSON.stringify({
+    schemaVersion: 1,
+    workers: [{ id: "worker-a", sshHost: "unused", codebuddyExecutable: "codebuddy", allowedRoots: ["/srv/projects"] }],
+    projects: [{ id: "sample", repository: "owner/sample", defaultBranch: "main", workerId: "worker-a", remoteRepositoryPath: "/srv/projects/sample" }],
+  }));
+  const token = "client-token-which-is-long-enough";
+  const workerToken = "worker-token-which-is-long-enough";
+  const store = new CloudTaskStore(path.join(directory, "cloud.sqlite"));
+  const server = createCloudControlServer({ apiToken: token, workerTokens: { "worker-a": workerToken }, projects: ProjectRegistry.load(registryFile), tasks: store, leaseMs: 60_000 });
+  const origin = await listen(server);
+  const create = async (key: string) => json(await fetch(`${origin}/v1/tasks`, { method: "POST", headers: auth(token), body: JSON.stringify({ projectId: "sample", spec: `Work ${key}`, idempotencyKey: key }) }));
+  try {
+    const queued = await create("cloud-reconcile-queued-01");
+    const listed = await json(await fetch(`${origin}/v1/tasks?state=queued&limit=10`, { headers: auth(token) }));
+    assert.equal(listed.tasks.length, 1);
+    assert.equal("spec" in listed.tasks[0], false);
+    const cancelled = await json(await fetch(`${origin}/v1/tasks/${queued.task.taskId}/cancel`, { method: "POST", headers: auth(token), body: "{}" }));
+    assert.equal(cancelled.task.state, "cancelled");
+
+    const active = await create("cloud-reconcile-active-01");
+    const claimed = await json(await fetch(`${origin}/v1/workers/worker-a/claim`, { method: "POST", headers: auth(workerToken), body: "{}" }));
+    assert.equal(claimed.task.taskId, active.task.taskId);
+    const requested = await json(await fetch(`${origin}/v1/tasks/${active.task.taskId}/cancel`, { method: "POST", headers: auth(token), body: "{}" }));
+    assert.equal(requested.task.state, "cancel_requested");
+    const workerView = await json(await fetch(`${origin}/v1/workers/worker-a/tasks/${active.task.taskId}`, { headers: auth(workerToken) }));
+    assert.equal(workerView.task.state, "cancel_requested");
+    const workerCancelled = await json(await fetch(`${origin}/v1/tasks/${active.task.taskId}/events`, { method: "POST", headers: auth(workerToken), body: JSON.stringify({ state: "cancelled", result: { cancellation: "stopped" } }) }));
+    assert.equal(workerCancelled.task.state, "cancelled");
+
+    const uncertain = await create("cloud-reconcile-unknown-01");
+    await json(await fetch(`${origin}/v1/workers/worker-a/claim`, { method: "POST", headers: auth(workerToken), body: "{}" }));
+    await json(await fetch(`${origin}/v1/tasks/${uncertain.task.taskId}/events`, { method: "POST", headers: auth(workerToken), body: JSON.stringify({ state: "unknown", result: { remoteJobId: "job-1" } }) }));
+    const unconfirmed = await fetch(`${origin}/v1/tasks/${uncertain.task.taskId}/reconcile`, { method: "POST", headers: auth(token), body: JSON.stringify({ action: "requeue" }) });
+    assert.equal(unconfirmed.status, 400);
+    const requeued = await json(await fetch(`${origin}/v1/tasks/${uncertain.task.taskId}/reconcile`, { method: "POST", headers: auth(token), body: JSON.stringify({ action: "requeue", remoteJobConfirmedStopped: true }) }));
+    assert.equal(requeued.task.state, "queued");
+    assert.equal(requeued.task.result.reconciliation.action, "requeue");
+  } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     store.close();
     await fs.rm(directory, { recursive: true, force: true });

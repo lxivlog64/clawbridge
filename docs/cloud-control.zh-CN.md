@@ -75,7 +75,10 @@ Worker 只需能出站访问 VPS 的 HTTPS 地址；无需公网 IP、入站端�
 Mac 客户端 Token：
 
 - `POST /v1/tasks`：提交 `{ projectId, spec, idempotencyKey, model? }`
+- `GET /v1/tasks`：按可选 `projectId`、`state`、`limit` 列出脱敏任务
 - `GET /v1/tasks/:taskId`：读取不含完整规格的状态
+- `POST /v1/tasks/:taskId/cancel`：取消排队任务，或请求 Worker 停止活动任务
+- `POST /v1/tasks/:taskId/reconcile`：仅在已确认远端 CodeBuddy 作业停止后，以 `{ action: "close" | "requeue", remoteJobConfirmedStopped: true }` 处置 `unknown` 任务
 - `GET /v1/projects`：读取已登记的只读项目列表（仅返回项目 ID、仓库、默认分支、目标 Worker 与能力等脱敏元数据；不含本地路径、凭据、CodeBuddy Token、允许工具或任务规格）
 
 Worker Token：
@@ -83,6 +86,7 @@ Worker Token：
 - `POST /v1/workers/:workerId/heartbeat`
 - `POST /v1/workers/:workerId/claim`
 - `POST /v1/tasks/:taskId/events`
+- `GET /v1/workers/:workerId/tasks/:taskId`：Worker 读取自己已领取任务的紧凑状态，用于响应取消请求
 
 除 `/health` 外均须使用 `Authorization: Bearer <token>`。不要在 URL、日志或 Git 提交中包含 Token。
 
@@ -97,7 +101,7 @@ codex mcp add clawbridge-cloud \
   -- node /absolute/path/to/clawbridge/dist/src/cloud-mcp.js
 ```
 
-随后使用 `clawbridge_cloud_submit` 提交任务，保存返回的 `taskId`；使用 `clawbridge_cloud_status` 查询开发、提交 SHA 与草稿 PR 状态。可用 `clawbridge_cloud_projects` 只读列出已登记项目，以便在提交前确认 `projectId`；该工具不会返回本地路径、凭据或任务规格。Codex 可在任务提交后退出，不需要维持到 Worker 的连接。
+随后使用 `clawbridge_cloud_submit` 提交任务，保存返回的 `taskId`；使用 `clawbridge_cloud_status` 查询开发、提交 SHA 与草稿 PR 状态，或以 `clawbridge_cloud_tasks` 查看任务列表。可用 `clawbridge_cloud_projects` 只读列出已登记项目，以便在提交前确认 `projectId`；该工具不会返回本地路径、凭据或任务规格。需要停止工作时使用 `clawbridge_cloud_cancel`。对于 `unknown`，先在 CodeBuddy 确认远端作业已经停止，再通过 `clawbridge_cloud_reconcile_unknown` 关闭或重新入队；错误确认会造成重复开发。Codex 可在任务提交后退出，不需要维持到 Worker 的连接。
 
 ## 上线前检查
 
