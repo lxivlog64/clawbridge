@@ -31,6 +31,7 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
       const url = new URL(request.url ?? "/", "http://localhost");
       if (request.method === "GET" && url.pathname === "/health") return send(response, 200, { ok: true });
       const client = url.pathname === "/v1/tasks" && request.method === "POST";
+      const projectList = url.pathname === "/v1/projects" && request.method === "GET";
       const taskMatch = /^\/v1\/tasks\/([0-9a-f-]{36})$/i.exec(url.pathname);
       const eventMatch = /^\/v1\/tasks\/([0-9a-f-]{36})\/events$/i.exec(url.pathname);
       const workerMatch = /^\/v1\/workers\/([A-Za-z0-9_-]{1,80})\/(heartbeat|claim)$/.exec(url.pathname);
@@ -41,6 +42,10 @@ export function createCloudControlServer(options: CloudControlOptions): http.Ser
         const project = options.projects.require(input.projectId);
         const created = options.tasks.createOrGet({ projectId: input.projectId, workerId: project.workerId, spec: input.spec, idempotencyKey: input.idempotencyKey, requestedModel: input.model ?? project.defaultModel });
         return send(response, 201, { ...created, task: publicTask(created.task) });
+      }
+      if (projectList) {
+        requireToken(request, options.apiToken);
+        return send(response, 200, { projects: options.projects.list() });
       }
       if (taskMatch && request.method === "GET") {
         requireToken(request, options.apiToken);
