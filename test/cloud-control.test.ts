@@ -69,6 +69,10 @@ test("cloud claims enforce the configured per-project concurrency limit", async 
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, first.taskId);
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 }), undefined, "second task must remain queued while the project is active");
     store.updateFromWorker(first.taskId, "worker-a", "succeeded");
+    const completed = store.get(first.taskId)!;
+    assert.equal(completed.leaseOwner, undefined);
+    assert.equal(completed.leaseExpiresAt, undefined);
+    assert.throws(() => store.updateFromWorker(first.taskId, "worker-a", "running"), /does not own|cannot change/i);
     assert.equal(store.claim("worker-a", 60_000, { sample: 1 })?.taskId, second.taskId);
   } finally {
     store.close();
@@ -253,6 +257,9 @@ test("a review is bound to its delivery SHA and becomes stale when a PR head cha
     const stale = store.observeReviewHead(task.taskId, secondHead);
     assert.equal(stale.review?.status, "stale");
     assert.equal(stale.review?.observedHeadSha, secondHead);
+    assert.equal(store.listDeliverableEvents(100).filter((event) => event.kind === "task.review_stale").length, 1);
+    store.observeReviewHead(task.taskId, secondHead);
+    assert.equal(store.listDeliverableEvents(100).filter((event) => event.kind === "task.review_stale").length, 1, "rechecking the same stale review must not emit another notification");
     assert.throws(() => store.recordReview(task.taskId, { conclusion: "approved", reviewedHeadSha: secondHead }), /current delivery SHA/i);
   } finally {
     store.close();
