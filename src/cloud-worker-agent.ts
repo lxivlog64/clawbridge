@@ -11,6 +11,8 @@ type CodeBuddyGateway = Pick<CodeBuddyClient, "dispatchJob" | "getJob">;
 interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
 }
+/** Persisted coordinates of an accepted remote job, retained even when its final outcome is unknown. */
+type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string };
 
 export interface CloudWorkerAgentOptions {
   workerId: string;
@@ -47,6 +49,10 @@ export class CloudWorkerAgent {
   }
 
   private async execute(task: CloudTask): Promise<void> {
+    // Set once CodeBuddy accepts the job. From that point on a local error is
+    // ambiguous: the remote job may still be running, so it must not be
+    // reported as a terminal failure or silently retried.
+    let accepted: JobDetails | undefined;
     try {
       const project = this.options.projects.require(task.projectId);
       if (project.workerId !== this.options.workerId) throw new Error("Task is assigned to a different worker.");
@@ -65,17 +71,21 @@ export class CloudWorkerAgent {
         bgIsolation: "none",
       });
       if (!job.id) throw new Error("CodeBuddy gateway returned no job id.");
-      const details = { remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch };
-      await this.options.control.update(task.taskId, "running", details);
-      await this.awaitCompletion(task.taskId, task.projectId, job.id, details);
+      accepted = { remoteJobId: job.id, worktreePath: prepared.worktreePath, baseSha: prepared.baseSha, branch: prepared.branch };
+      await this.options.control.update(task.taskId, "running", accepted);
+      await this.awaitCompletion(task.taskId, task.projectId, accepted);
     } catch (error) {
-      await this.options.control.update(task.taskId, "failed", { error: message(error) });
+      // Before a remote job id exists nothing was dispatched, so the attempt is
+      // safely failed. Afterwards the remote job may still be running, so the
+      // outcome is unknown and must be reconciled by an operator, not retried here.
+      if (accepted) await this.options.control.update(task.taskId, "unknown", { ...accepted, error: message(error) });
+      else await this.options.control.update(task.taskId, "failed", { error: message(error) });
     }
   }
 
-  private async awaitCompletion(taskId: string, projectId: string, jobId: string, details: { remoteJobId: string; worktreePath: string; baseSha: string; branch: string }): Promise<void> {
+  private async awaitCompletion(taskId: string, projectId: string, details: JobDetails): Promise<void> {
     while (true) {
-      const job = await this.options.codeBuddy.getJob(jobId);
+      const job = await this.options.codeBuddy.getJob(details.remoteJobId);
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
       if (state === "running") {
         await this.options.control.update(taskId, "running", details);
