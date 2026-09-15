@@ -87,6 +87,7 @@ Worker Token：
 - `POST /v1/workers/:workerId/claim`
 - `POST /v1/tasks/:taskId/events`
 - `GET /v1/workers/:workerId/tasks/:taskId`：Worker 读取自己已领取任务的紧凑状态，用于响应取消请求
+- `GET /v1/workers/:workerId/active`：Worker 重启后读取自己仍持有的活动租约；含已接受 job 的任务只恢复查询，不会重新派发
 
 除 `/health` 外均须使用 `Authorization: Bearer <token>`。不要在 URL、日志或 Git 提交中包含 Token。
 

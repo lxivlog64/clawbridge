@@ -188,3 +188,36 @@ test("Worker stops the accepted CodeBuddy job when cloud cancellation is request
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+
+test("restarted Worker resumes an accepted job instead of dispatching a second job", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-resume-"));
+  const task = { ...leasedTask(), state: "running" as const, result: { remoteJobId: "job-1", worktreePath: WORKTREE, baseSha: BASE_SHA, branch: BRANCH } };
+  const updates: RecordedUpdate[] = [];
+  let dispatchCount = 0;
+  const control = {
+    ...controlFor(task, updates),
+    async activeTasks() { return [task]; },
+  };
+  const codeBuddy = {
+    async dispatchJob() { dispatchCount += 1; return { id: "job-2" }; },
+    async getJob(id: string) { assert.equal(id, "job-1"); return { id, state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control, codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.equal(dispatchCount, 0);
+    assert.deepEqual(updates.map((update) => update.state), ["succeeded"]);
+    assert.equal(updates[0]?.result?.remoteJobId, "job-1");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

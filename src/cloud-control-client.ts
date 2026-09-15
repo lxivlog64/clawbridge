@@ -38,6 +38,10 @@ export class CloudControlClient {
     catch (error) { if (error instanceof CloudApiError && error.status === 404) return undefined; throw error; }
   }
 
+  async activeTasks(workerId: string): Promise<CloudTask[]> {
+    return (await this.request<{ tasks: CloudTask[] }>(`/v1/workers/${encodeURIComponent(workerId)}/active`, {})).tasks;
+  }
+
   async heartbeat(workerId: string, metadata?: Record<string, unknown>): Promise<void> {
     await this.request(`/v1/workers/${encodeURIComponent(workerId)}/heartbeat`, { method: "POST", body: JSON.stringify({ ...(metadata ? { metadata } : {}) }) });
   }
