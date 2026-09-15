@@ -239,7 +239,7 @@ test("private cloud worker creates a worktree, runs CodeBuddy, and reports a dra
   const headSha = "b".repeat(40);
   const task: CloudTask = {
     taskId: "123e4567-e89b-12d3-a456-426614174000", idempotencyKey: "cloud-worker-request-01", projectId: "sample", workerId: "worker-a",
-    spec: "Add a health endpoint", specHash: "c".repeat(64), state: "leased", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), leaseOwner: "worker-a", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    spec: "Add a health endpoint", specHash: "c".repeat(64), requestedModel: "deepseek-v4.1-flash", state: "leased", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), leaseOwner: "worker-a", leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
   };
   const updates: Array<{ state: string; result?: Record<string, unknown> }> = [];
   const control = {
@@ -261,7 +261,7 @@ test("private cloud worker creates a worktree, runs CodeBuddy, and reports a dra
     async mkdir() { return result(); },
     async gh(_worker: unknown, _cwd: string, args: string[]) { return args[1] === "view" ? result("", "not found", 1) : result("https://github.com/owner/sample/pull/1\n"); },
   };
-  const codeBuddy = { async dispatchJob() { return { id: "job-1", state: "working" }; }, async getJob() { return { id: "job-1", state: "done", settled: true }; } };
+  const codeBuddy = { async dispatchJob() { return { id: "job-1", state: "working", model: "deepseek-v4.1-flash" }; }, async getJob() { return { id: "job-1", state: "done", settled: true, model: "deepseek-v4.1-flash", usage: { inputTokens: 120, outputTokens: 34 } }; } };
   try {
     const agent = new CloudWorkerAgent({ workerId: "worker-a", projects: ProjectRegistry.load(registryFile), control, codeBuddy, localWorker, pollMs: 1 });
     assert.equal(await agent.once(), true);
@@ -269,6 +269,13 @@ test("private cloud worker creates a worktree, runs CodeBuddy, and reports a dra
     assert.equal(updates.at(-1)?.state, "succeeded");
     assert.equal(updates.at(-1)?.result?.headSha, headSha);
     assert.equal(updates.at(-1)?.result?.prUrl, "https://github.com/owner/sample/pull/1");
+    const usage = updates.at(-1)?.result?.usage as Record<string, unknown>;
+    assert.equal(usage.requestedModel, "deepseek-v4.1-flash");
+    assert.equal(usage.observedModel, "deepseek-v4.1-flash");
+    assert.equal(typeof usage.durationMs, "number");
+    assert.equal(usage.inputTokens, 120);
+    assert.equal(usage.outputTokens, 34);
+    assert.equal(usage.credits, "unknown");
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
 
