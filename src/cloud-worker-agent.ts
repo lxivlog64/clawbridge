@@ -158,11 +158,12 @@ export class CloudWorkerAgent {
       }
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
       if (state === "running" || state === "waiting_input") {
-        const waitingPermission = await this.waitingForPermission(details);
-        const activeState = waitingPermission ? "waiting_permission" : state;
+        const pendingTool = await this.pendingToolState(details);
+        const activeState = pendingTool ?? state;
         await this.updateReliably(taskId, activeState, {
           ...details, usage: usageSnapshot(details, job),
-          ...(waitingPermission ? { blockReason: "CodeBuddy has an executable tool call waiting for permission." } : {}),
+          ...(pendingTool === "waiting_permission" ? { blockReason: "CodeBuddy has an executable tool call waiting for permission." } : {}),
+          ...(pendingTool === "stalled" ? { blockReason: "CodeBuddy has a subagent call with no completion event; the job is stalled rather than actively developing." } : {}),
         }, signal);
         await wait(this.pollMs, signal);
         continue;
@@ -192,14 +193,17 @@ export class CloudWorkerAgent {
     }
   }
 
-  private async waitingForPermission(details: JobDetails): Promise<boolean> {
-    if (details.permissionMode === "auto" || details.permissionMode === "dontAsk" || !this.options.codeBuddy.transcript) return false;
+  private async pendingToolState(details: JobDetails): Promise<"waiting_permission" | "stalled" | undefined> {
+    if (!this.options.codeBuddy.transcript) return undefined;
     try {
-      return hasAgedPendingExecutable(await this.options.codeBuddy.transcript(details.remoteJobId), Date.now(), this.permissionPendingMs);
+      const transcript = await this.options.codeBuddy.transcript(details.remoteJobId);
+      if (hasAgedPendingSubagent(transcript, Date.now(), this.permissionPendingMs)) return "stalled";
+      if (details.permissionMode !== "auto" && details.permissionMode !== "dontAsk" && hasAgedPendingExecutable(transcript, Date.now(), this.permissionPendingMs)) return "waiting_permission";
+      return undefined;
     } catch {
       // Status polling remains authoritative when the optional diagnostic
       // transcript endpoint is unavailable.
-      return false;
+      return undefined;
     }
   }
 
@@ -252,7 +256,7 @@ export class CloudWorkerAgent {
 }
 
 function developmentPrompt(task: CloudTask, baseSha: string, branch: string, maxRepairRounds: number): string {
-  return `Luban task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Use one command per Bash tool call; do not join commands with &&, ;, pipes, or command substitution because this project uses exact command allowlists. The Worker, not you, pushes the branch and creates the draft PR after verifying your commit. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
+  return `Luban task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Do not use Agent, subagent, team, delegation, or background-agent tools; inspect and edit the repository directly with Read, Glob, Grep, Edit, Write, and permitted Bash commands. Use one command per Bash tool call; do not join commands with &&, ;, pipes, or command substitution because this project uses exact command allowlists. The Worker, not you, pushes the branch and creates the draft PR after verifying your commit. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
 }
 function permissionMode(profile: string | undefined): BackgroundPermissionMode {
   return profile === "default" || profile === "acceptEdits" || profile === "auto" || profile === "dontAsk" ? profile : "auto";
@@ -284,6 +288,27 @@ export function hasAgedPendingExecutable(transcript: CodeBuddyTranscript, nowMs:
     const timestamp = typeof metadata?.timestamp === "string" ? Date.parse(metadata.timestamp) : Number.NaN;
     return Number.isFinite(timestamp) && nowMs - timestamp >= minimumAgeMs;
   });
+}
+
+export function hasAgedPendingSubagent(transcript: CodeBuddyTranscript, nowMs: number, minimumAgeMs: number): boolean {
+  const completed = completedToolCalls(transcript);
+  return transcript.updates.some((update) => {
+    const record = object(update);
+    if (record?.sessionUpdate !== "tool_call" || record.status !== "pending" || typeof record.toolCallId !== "string" || completed.has(record.toolCallId)) return false;
+    const metadata = object(record._meta);
+    if (metadata?.toolName !== "Agent" && metadata?.isSubagent !== true) return false;
+    const timestamp = typeof metadata?.timestamp === "string" ? Date.parse(metadata.timestamp) : Number.NaN;
+    return Number.isFinite(timestamp) && nowMs - timestamp >= minimumAgeMs;
+  });
+}
+
+function completedToolCalls(transcript: CodeBuddyTranscript): Set<string> {
+  const completed = new Set<string>();
+  for (const update of transcript.updates) {
+    const record = object(update);
+    if (record?.sessionUpdate === "tool_call_update" && typeof record.toolCallId === "string" && record.status !== "pending") completed.add(record.toolCallId);
+  }
+  return completed;
 }
 
 function object(value: unknown): Record<string, unknown> | undefined {
