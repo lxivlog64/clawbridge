@@ -159,8 +159,16 @@ export class CloudWorkerAgent {
         await this.options.control.update(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, usage: usageSnapshot(details, job), remoteState: state });
         return;
       }
-      const delivery = await this.deliver(taskId, projectId, details);
-      await this.options.control.update(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery });
+      try {
+        const delivery = await this.deliver(taskId, projectId, details);
+        await this.options.control.update(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery });
+      } catch (error) {
+        // The CodeBuddy job is already settled, so a verification/delivery
+        // error is a known terminal failure rather than an ambiguous outcome.
+        await this.options.control.update(taskId, "failed", {
+          ...details, usage: usageSnapshot(details, job), remoteState: "succeeded", error: message(error),
+        });
+      }
       return;
     }
   }
@@ -187,12 +195,16 @@ export class CloudWorkerAgent {
     const worker = this.options.projects.workerFor(project.id);
     const head = await this.localWorker.git(worker, details.worktreePath, ["rev-parse", "HEAD"]);
     if (head.exitCode !== 0 || !/^[0-9a-f]{40}$/i.test(head.stdout.trim())) throw new Error("Cannot verify task commit.");
+    const headSha = head.stdout.trim();
     const currentBranch = await this.localWorker.git(worker, details.worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
     if (currentBranch.exitCode !== 0 || currentBranch.stdout.trim() !== details.branch || details.branch === project.defaultBranch) throw new Error("Task worktree is not on its recorded delivery branch.");
+    const status = await this.localWorker.git(worker, details.worktreePath, ["status", "--porcelain"]);
+    if (status.exitCode !== 0) throw new Error("Cannot inspect task worktree before delivery.");
+    if (status.stdout.trim()) throw new Error("CodeBuddy completed with uncommitted changes; resume the same task worktree and commit them before delivery.");
+    if (headSha === details.baseSha) throw new Error("CodeBuddy completed without creating a task commit.");
     const pushed = await this.localWorker.git(worker, details.worktreePath, ["push", "--set-upstream", project.deliveryRemote, details.branch]);
     if (pushed.exitCode !== 0) throw new Error(`Could not push task branch: ${pushed.stderr.slice(-1_000)}`);
     const remoteHead = await this.localWorker.git(worker, details.worktreePath, ["ls-remote", project.deliveryRemote, `refs/heads/${details.branch}`]);
-    const headSha = head.stdout.trim();
     if (remoteHead.exitCode !== 0 || !remoteHead.stdout.startsWith(headSha)) throw new Error("Verified commit is not pushed to the task branch.");
     const existing = await this.localWorker.gh(worker, details.worktreePath, ["pr", "view", details.branch, "--json", "url", "--jq", ".url"]);
     if (existing.exitCode === 0 && /^https:\/\//.test(existing.stdout.trim())) return { headSha, prUrl: existing.stdout.trim() };

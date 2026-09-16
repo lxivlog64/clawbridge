@@ -200,7 +200,7 @@ test("an expired runtime limit stops CodeBuddy and reports a terminal failure", 
   }
 });
 
-test("post-dispatch delivery failure reports unknown with job coordinates", async () => {
+test("post-dispatch delivery failure reports a terminal failure with job coordinates", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-delivery-"));
   const task = leasedTask();
   const updates: RecordedUpdate[] = [];
@@ -214,7 +214,7 @@ test("post-dispatch delivery failure reports unknown with job coordinates", asyn
       control: controlFor(task, updates), codeBuddy, localWorker: healthyGit({ head: command("", "no HEAD", 1) }), pollMs: 1,
     });
     assert.equal(await agent.once(), true);
-    assert.deepEqual(updates.map((update) => update.state), ["running", "unknown"]);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "failed"]);
     const result = updates.at(-1)?.result;
     assert.equal(result?.remoteJobId, "job-1");
     assert.equal(result?.worktreePath, WORKTREE);

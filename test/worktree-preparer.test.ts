@@ -4,6 +4,8 @@ import { prepareWorktree } from "../src/worktree-preparer.js";
 import type { RegisteredProject, RegisteredWorker } from "../src/project-registry.js";
 import type { RemoteCommandResult } from "../src/remote-worker.js";
 
+const TASK_ID = "123e4567-e89b-12d3-a456-426614174000";
+
 const worker: RegisteredWorker = {
   id: "linux", sshHost: "worker", gatewayPort: 8080, codebuddyExecutable: "codebuddy",
   allowedRoots: ["/srv/projects"], capabilities: [], maxConcurrentJobs: 1,
@@ -61,6 +63,7 @@ test("a confirmed reconciled retry removes only a clean, uncommitted stale workt
       if (args[0] === "status") return success();
       if (args[0] === "fetch") return success();
       if (args[0] === "rev-parse" && args[1] === "origin/main") return success(`${"b".repeat(40)}\n`);
+      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return success(`clawbridge/${taskId}\n`);
       if (args[0] === "rev-parse" && args[1] === "HEAD") return success(`${"a".repeat(40)}\n`);
       return success();
     },
@@ -72,18 +75,40 @@ test("a confirmed reconciled retry removes only a clean, uncommitted stale workt
   assert.ok(calls.some((call) => call.cwd === "/srv/projects/app" && call.args.join(" ") === `branch -D clawbridge/${taskId}`));
 });
 
-test("a reconciled retry preserves a stale worktree with commits", async () => {
+test("a reconciled retry reuses a stale worktree with commits", async () => {
   const remote = {
     async git(_worker: RegisteredWorker, _cwd: string, args: string[]) {
       if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return success("true\n");
       if (args[0] === "status") return success();
       if (args[0] === "fetch") return success();
       if (args[0] === "rev-parse" && args[1] === "origin/main") return success(`${"b".repeat(40)}\n`);
+      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return success(`clawbridge/${TASK_ID}\n`);
       if (args[0] === "rev-parse" && args[1] === "HEAD") return success(`${"c".repeat(40)}\n`);
-      throw new Error("a worktree with commits must not be removed");
+      throw new Error("a reusable worktree must not be removed");
     },
     async mkdir() { return success(); },
   };
   const result = await prepareWorktree("123e4567-e89b-12d3-a456-426614174000", project, worker, remote, () => true, { priorBaseSha: "a".repeat(40) });
-  assert.deepEqual(result, { ok: false, reason: "Reconciled task worktree has commits beyond its original base; preserve or inspect it before retrying." });
+  assert.deepEqual(result, {
+    ok: true, baseSha: "a".repeat(40), branch: `clawbridge/${TASK_ID}`,
+    worktreePath: `/srv/projects/app.clawbridge-worktrees/${TASK_ID}`,
+  });
+});
+
+test("a reconciled retry reuses a stale worktree with uncommitted changes", async () => {
+  const remote = {
+    async git(_worker: RegisteredWorker, cwd: string, args: string[]) {
+      if (args[0] === "rev-parse" && args[1] === "--is-inside-work-tree") return success("true\n");
+      if (args[0] === "status") return cwd.endsWith(TASK_ID) ? success(" M src/recordings.ts\n") : success();
+      if (args[0] === "fetch") return success();
+      if (args[0] === "rev-parse" && args[1] === "origin/main") return success(`${"b".repeat(40)}\n`);
+      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return success(`clawbridge/${TASK_ID}\n`);
+      if (args[0] === "rev-parse" && args[1] === "HEAD") return success(`${"a".repeat(40)}\n`);
+      throw new Error("a reusable worktree must not be removed");
+    },
+    async mkdir() { return success(); },
+  };
+  const result = await prepareWorktree(TASK_ID, project, worker, remote, () => true, { priorBaseSha: "a".repeat(40) });
+  assert.equal(result.ok, true);
+  if (result.ok) assert.equal(result.worktreePath, `/srv/projects/app.clawbridge-worktrees/${TASK_ID}`);
 });
