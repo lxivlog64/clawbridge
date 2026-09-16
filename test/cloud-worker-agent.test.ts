@@ -148,6 +148,34 @@ test("dontAsk is forwarded only when explicitly configured by the project", asyn
   }
 });
 
+test("project tool rules are also passed as inline permission settings for daemon jobs", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-inline-settings-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let settings = "";
+  const codeBuddy = {
+    async dispatchJob(input: { settings?: string }) { settings = input.settings ?? ""; return { id: "job-1", state: "working" }; },
+    async getJob() { return { id: "job-1", state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const registryFile = await writeRegistry(directory, "acceptEdits");
+    const raw = JSON.parse(await fs.readFile(registryFile, "utf8"));
+    raw.projects[0].allowedTools = ["Bash(git:*)"];
+    await fs.writeFile(registryFile, JSON.stringify(raw));
+    const agent = new CloudWorkerAgent({ workerId: "worker-a", projects: ProjectRegistry.load(registryFile), control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1 });
+    assert.equal(await agent.once(), true);
+    assert.deepEqual(JSON.parse(settings), { permissions: { allow: ["Bash(git:*)"], disableBypassPermissionsMode: "disable" } });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("pre-dispatch worktree failure reports failed and never dispatches", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-predispatch-"));
   const task = leasedTask();

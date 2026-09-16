@@ -105,6 +105,7 @@ server.tool(
         effort,
         permissionMode: permissionMode(project.permissionProfile),
         allowedTools: project.allowedTools,
+        ...(project.allowedTools.length > 0 ? { settings: JSON.stringify({ permissions: { allow: project.allowedTools, disableBypassPermissionsMode: "disable" } }) } : {}),
         name: `clawbridge-${taskId}`,
         bgIsolation: "none",
       });

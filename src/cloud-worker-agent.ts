@@ -105,6 +105,7 @@ export class CloudWorkerAgent {
         model: task.requestedModel,
         permissionMode: taskPermissionMode,
         allowedTools: project.allowedTools,
+        ...(project.allowedTools.length > 0 ? { settings: permissionSettings(project.allowedTools) } : {}),
         name: `clawbridge-${task.taskId}`,
         bgIsolation: "none",
       });
@@ -255,6 +256,9 @@ function developmentPrompt(task: CloudTask, baseSha: string, branch: string, max
 }
 function permissionMode(profile: string | undefined): BackgroundPermissionMode {
   return profile === "default" || profile === "acceptEdits" || profile === "auto" || profile === "dontAsk" ? profile : "auto";
+}
+function permissionSettings(allowedTools: string[]): string {
+  return JSON.stringify({ permissions: { allow: allowedTools, disableBypassPermissionsMode: "disable" } });
 }
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 2_000) : "Unknown worker error."; }
 function jobDetails(result: Record<string, unknown> | undefined, fallbackPermissionMode?: BackgroundPermissionMode): JobDetails | undefined {
