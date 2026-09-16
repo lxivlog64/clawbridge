@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CloudWorkerAgent, hasAgedPendingExecutable } from "../src/cloud-worker-agent.js";
+import { CloudWorkerAgent, hasAgedPendingExecutable, hasAgedPendingSubagent } from "../src/cloud-worker-agent.js";
 import type { CloudTask, CloudTaskState } from "../src/cloud-task-store.js";
 import { ProjectRegistry } from "../src/project-registry.js";
 import type { RemoteCommandResult } from "../src/remote-worker.js";
@@ -33,6 +33,44 @@ test("aged executable calls without a completion update indicate a permission wa
   assert.equal(hasAgedPendingExecutable({ updates: [
     { sessionUpdate: "tool_call", toolCallId: "call-2", status: "pending", kind: "read", _meta: { timestamp } },
   ] }, Date.now(), 120_000), false);
+});
+
+test("aged Agent calls without a completion update indicate a stalled subagent", () => {
+  const timestamp = new Date(Date.now() - 180_000).toISOString();
+  const pending = { sessionUpdate: "tool_call", toolCallId: "agent-1", status: "pending", kind: "other", _meta: { timestamp, toolName: "Agent", isSubagent: true } };
+  assert.equal(hasAgedPendingSubagent({ updates: [pending] }, Date.now(), 120_000), true);
+  assert.equal(hasAgedPendingSubagent({ updates: [pending, { sessionUpdate: "tool_call_update", toolCallId: "agent-1", status: "completed" }] }, Date.now(), 120_000), false);
+});
+
+test("cloud Worker reports stalled and resumes after a subagent completes", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-stalled-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let reads = 0;
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() { reads += 1; return reads === 1 ? { id: "job-1", state: "working", alive: true } : { id: "job-1", state: "done", settled: true }; },
+    async transcript() { return { updates: [
+      { sessionUpdate: "tool_call", toolCallId: "agent-1", status: "pending", kind: "other", _meta: { timestamp: new Date(Date.now() - 1_000).toISOString(), toolName: "Agent", isSubagent: true } },
+    ] }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory, "auto")),
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1, permissionPendingMs: 0,
+    });
+    assert.equal(await agent.once(), true);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "stalled", "succeeded"]);
+    assert.match(String(updates[1]?.result?.blockReason), /subagent/i);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("cloud Worker reports waiting_permission and resumes after the tool is approved", async () => {
@@ -66,7 +104,7 @@ test("cloud Worker reports waiting_permission and resumes after the tool is appr
   }
 });
 
-async function writeRegistry(directory: string, permissionProfile?: "default" | "acceptEdits" | "auto"): Promise<string> {
+async function writeRegistry(directory: string, permissionProfile?: "default" | "acceptEdits" | "auto" | "dontAsk"): Promise<string> {
   const registryFile = path.join(directory, "projects.json");
   await fs.writeFile(registryFile, JSON.stringify({
     schemaVersion: 1,
@@ -117,6 +155,65 @@ function healthyGit(overrides: { head?: RemoteCommandResult } = {}) {
   };
 }
 
+test("dontAsk is forwarded only when explicitly configured by the project", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-dont-ask-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let receivedMode: string | undefined;
+  const codeBuddy = {
+    async dispatchJob(input: { permissionMode?: string }) {
+      receivedMode = input.permissionMode;
+      return { id: "job-1", state: "working" };
+    },
+    async getJob() { return { id: "job-1", state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory, "dontAsk")),
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.equal(receivedMode, "dontAsk");
+    assert.equal(updates.at(-1)?.state, "succeeded");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("project tool rules are also passed as inline permission settings for daemon jobs", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-inline-settings-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let settings = "";
+  const codeBuddy = {
+    async dispatchJob(input: { settings?: string }) { settings = input.settings ?? ""; return { id: "job-1", state: "working" }; },
+    async getJob() { return { id: "job-1", state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const registryFile = await writeRegistry(directory, "acceptEdits");
+    const raw = JSON.parse(await fs.readFile(registryFile, "utf8"));
+    raw.projects[0].allowedTools = ["Bash(git:*)"];
+    await fs.writeFile(registryFile, JSON.stringify(raw));
+    const agent = new CloudWorkerAgent({ workerId: "worker-a", projects: ProjectRegistry.load(registryFile), control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1 });
+    assert.equal(await agent.once(), true);
+    assert.deepEqual(JSON.parse(settings), { permissions: { allow: ["Bash(git:*)"], disableBypassPermissionsMode: "disable" } });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("pre-dispatch worktree failure reports failed and never dispatches", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-predispatch-"));
   const task = leasedTask();
@@ -150,29 +247,77 @@ test("pre-dispatch worktree failure reports failed and never dispatches", async 
   }
 });
 
-test("post-dispatch polling error reports unknown with job coordinates", async () => {
+test("post-dispatch polling error retains the lease and retries the same job", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-polling-"));
   const task = leasedTask();
   const updates: RecordedUpdate[] = [];
   let prompt = "";
+  let reads = 0;
   const codeBuddy = {
     async dispatchJob(input: { prompt: string }) { prompt = input.prompt; return { id: "job-1", state: "working" }; },
-    async getJob() { throw new Error("CodeBuddy gateway is unreachable."); },
+    async getJob() {
+      reads += 1;
+      if (reads === 1) throw new Error("CodeBuddy gateway is unreachable.");
+      return { id: "job-1", state: "done", settled: true };
+    },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
   };
   try {
     const agent = new CloudWorkerAgent({
       workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
-      control: controlFor(task, updates), codeBuddy, localWorker: healthyGit(), pollMs: 1,
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1,
     });
     assert.equal(await agent.once(), true);
-    assert.deepEqual(updates.map((update) => update.state), ["running", "unknown"]);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "running", "succeeded"]);
+    assert.match(String(updates[1]?.result?.pollWarning), /unreachable/i);
     const result = updates.at(-1)?.result;
     assert.equal(result?.remoteJobId, "job-1");
     assert.equal(result?.worktreePath, WORKTREE);
     assert.equal(result?.baseSha, BASE_SHA);
     assert.equal(result?.branch, BRANCH);
-    assert.match(String(result?.error), /unreachable/i);
     assert.match(prompt, /at most 1 repair round/i);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a transient control-plane update failure does not make an accepted job unknown", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-control-retry-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let updateAttempts = 0;
+  const baseControl = controlFor(task, updates);
+  const control = {
+    ...baseControl,
+    async update(taskId: string, state: WorkerUpdateState, recorded?: Record<string, unknown>) {
+      updateAttempts += 1;
+      if (updateAttempts === 1) throw new Error("control plane fetch failed");
+      return baseControl.update(taskId, state, recorded);
+    },
+  };
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() { return { id: "job-1", state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control, codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.equal(updateAttempts, 3);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "succeeded"]);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -200,7 +345,7 @@ test("an expired runtime limit stops CodeBuddy and reports a terminal failure", 
   }
 });
 
-test("post-dispatch delivery failure reports unknown with job coordinates", async () => {
+test("post-dispatch delivery failure reports a terminal failure with job coordinates", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-delivery-"));
   const task = leasedTask();
   const updates: RecordedUpdate[] = [];
@@ -214,13 +359,46 @@ test("post-dispatch delivery failure reports unknown with job coordinates", asyn
       control: controlFor(task, updates), codeBuddy, localWorker: healthyGit({ head: command("", "no HEAD", 1) }), pollMs: 1,
     });
     assert.equal(await agent.once(), true);
-    assert.deepEqual(updates.map((update) => update.state), ["running", "unknown"]);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "failed"]);
     const result = updates.at(-1)?.result;
     assert.equal(result?.remoteJobId, "job-1");
     assert.equal(result?.worktreePath, WORKTREE);
     assert.equal(result?.baseSha, BASE_SHA);
     assert.equal(result?.branch, BRANCH);
     assert.match(String(result?.error), /verify task commit/i);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a settled CodeBuddy rate-limit result is failed without attempting delivery", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-rate-limit-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let gitCalls = 0;
+  const localWorker = {
+    ...healthyGit(),
+    async git(...args: Parameters<ReturnType<typeof healthyGit>["git"]>) {
+      gitCalls += 1;
+      return healthyGit().git(...args);
+    },
+  };
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() {
+      return { id: "job-1", state: "done", settled: true, alive: true, output: { result: "429 您的使用量已超出频率限制" } };
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "failed"]);
+    assert.match(String(updates.at(-1)?.result?.error), /429/);
+    // Worktree preparation uses six git calls; delivery must not add any.
+    assert.equal(gitCalls, 6);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

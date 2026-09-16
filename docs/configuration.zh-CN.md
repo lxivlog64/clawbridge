@@ -176,8 +176,8 @@ git clone git@github.com:owner/project.git
 
 - `model`：使用登录后 `codebuddy --help` 列出的具体模型 ID，避免依赖动态别名。
 - `effort`：简单修改用 `low`/`medium`，复杂设计和排错用 `high`/`xhigh`。
-- `permissionMode`：后台开发默认使用 `auto`。`acceptEdits` 只自动接受文件编辑，Git、测试和目录检查等 Bash 命令仍可能等待人工批准，不适合无人值守任务。在 `default` 或 `acceptEdits` 下，鲁班会检查 transcript；可执行工具调用超过 120 秒仍没有完成更新时，任务显示为 `waiting_permission` 并触发状态通知。不要使用跳过全部权限检查的模式。
-- `allowedTools`：可选的会话级最小白名单，例如 `["Bash(npm test:*)", "Bash(git status:*)"]`。只为已登记项目的必要命令添加规则；不要使用泛化的 `Bash` 规则。
+- `permissionMode`：后台开发默认使用 `auto`。当 `auto` 的安全分类器不可用时，优先改用 `acceptEdits`：文件编辑自动允许，Bash 仍必须命中 `allowedTools`。`dontAsk` 会直接拒绝未预先放行的编辑或命令，不适合作为只配置 Bash 白名单的替代方案。在 `default` 或 `acceptEdits` 下，鲁班会检查 transcript；可执行工具调用超过 120 秒仍没有完成更新时，任务显示为 `waiting_permission` 并触发状态通知。禁止使用跳过全部权限检查的模式。
+- `allowedTools`：可选的会话级最小白名单，例如 `["Bash(npm test)", "Bash(npm test:*)", "Bash(git status)", "Bash(git status:*)"]`。无参数和带参数形式需分别列出；后台提示会要求每次 Bash 只执行一个命令，避免组合命令绕过或错过精确规则。只为已登记项目的必要命令添加规则；不要使用泛化的 `Bash` 规则。
 - `useWorktree`：Git 仓库中保持为 `true`；仅做非 Git 连通测试时才关闭。
 - `cwd`：只指向专用开发目录，不指向用户主目录或系统目录。
 

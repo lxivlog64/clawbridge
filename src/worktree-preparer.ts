@@ -38,8 +38,14 @@ export async function prepareWorktree(
   const mkdir = await remote.mkdir(worker, `${repositoryPath}.clawbridge-worktrees`);
   if (mkdir.exitCode !== 0) return { ok: false, reason: `Cannot create worktree directory: ${mkdir.stderr.slice(-1_000)}` };
   if (requeue) {
-    const cleanup = await cleanupRequeuedWorktree(remote, worker, repositoryPath, worktreePath, branch, requeue.priorBaseSha);
-    if (!cleanup.ok) return cleanup;
+    const recovery = await recoverRequeuedWorktree(remote, worker, repositoryPath, worktreePath, branch, requeue.priorBaseSha);
+    if (!recovery.ok) return recovery;
+    // A reconciled task whose remote job is confirmed stopped may safely
+    // continue in its existing worktree. This preserves unfinished edits or
+    // commits instead of either deleting them or permanently blocking retry.
+    if (recovery.reuse) {
+      return { ok: true, worktreePath, baseSha: requeue.priorBaseSha, branch };
+    }
   }
   const created = await remote.git(worker, repositoryPath, ["worktree", "add", "--detach", worktreePath, baseSha]);
   if (created.exitCode !== 0) return { ok: false, reason: `Cannot create task worktree: ${created.stderr.slice(-1_000)}` };
@@ -48,29 +54,39 @@ export async function prepareWorktree(
   return { ok: true, worktreePath, baseSha, branch };
 }
 
-/** A reconciled retry may reuse a taskId only when its previous worktree has no work to lose. */
-async function cleanupRequeuedWorktree(
+/**
+ * Reconcile the old worktree after the caller confirmed its CodeBuddy job is
+ * stopped. Clean worktrees at the original base are recreated from the latest
+ * default branch; worktrees containing useful edits or commits are reused.
+ */
+async function recoverRequeuedWorktree(
   remote: GitPreparerRemote,
   worker: RegisteredWorker,
   repositoryPath: string,
   worktreePath: string,
   branch: string,
   priorBaseSha: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true; reuse: boolean } | { ok: false; reason: string }> {
   const status = await remote.git(worker, worktreePath, ["status", "--porcelain"]);
   // A missing old worktree needs no cleanup. Other Git errors are not safe to ignore.
   if (status.exitCode !== 0) {
-    if (/not a git repository|No such file or directory/i.test(status.stderr)) return { ok: true };
+    if (/not a git repository|No such file or directory/i.test(status.stderr)) return { ok: true, reuse: false };
     return { ok: false, reason: `Cannot inspect reconciled task worktree: ${status.stderr.slice(-1_000)}` };
   }
-  if (status.stdout.trim()) return { ok: false, reason: "Reconciled task worktree has uncommitted changes; preserve or inspect it before retrying." };
+  const currentBranch = await remote.git(worker, worktreePath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (currentBranch.exitCode !== 0 || currentBranch.stdout.trim() !== branch) {
+    return { ok: false, reason: "Reconciled task worktree is not on its recorded task branch." };
+  }
   const head = await remote.git(worker, worktreePath, ["rev-parse", "HEAD"]);
-  if (head.exitCode !== 0 || head.stdout.trim() !== priorBaseSha) {
-    return { ok: false, reason: "Reconciled task worktree has commits beyond its original base; preserve or inspect it before retrying." };
+  if (head.exitCode !== 0) {
+    return { ok: false, reason: "Cannot resolve reconciled task worktree HEAD." };
+  }
+  if (status.stdout.trim() || head.stdout.trim() !== priorBaseSha) {
+    return { ok: true, reuse: true };
   }
   const removed = await remote.git(worker, repositoryPath, ["worktree", "remove", worktreePath]);
   if (removed.exitCode !== 0) return { ok: false, reason: `Cannot remove clean reconciled task worktree: ${removed.stderr.slice(-1_000)}` };
   const deleted = await remote.git(worker, repositoryPath, ["branch", "-D", branch]);
   if (deleted.exitCode !== 0) return { ok: false, reason: `Cannot remove reconciled task branch: ${deleted.stderr.slice(-1_000)}` };
-  return { ok: true };
+  return { ok: true, reuse: false };
 }

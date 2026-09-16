@@ -27,7 +27,7 @@ server.tool(
 server.tool(
   "clawbridge_cloud_tasks",
   "List compact cloud task states. Full task specifications are never returned.",
-  { projectId: z.string().min(1).max(80).optional(), state: z.enum(["queued", "leased", "running", "waiting_input", "waiting_permission", "cancel_requested", "succeeded", "failed", "cancelled", "unknown"]).optional(), limit: z.number().int().min(1).max(100).optional() },
+  { projectId: z.string().min(1).max(80).optional(), state: z.enum(["queued", "leased", "running", "waiting_input", "waiting_permission", "stalled", "cancel_requested", "succeeded", "failed", "cancelled", "unknown"]).optional(), limit: z.number().int().min(1).max(100).optional() },
   async (input) => json({ tasks: await client.tasks(input) }),
 );
 

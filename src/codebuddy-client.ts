@@ -12,6 +12,8 @@ export interface CodeBuddyJobRequest {
   permissionMode?: "default" | "acceptEdits" | "plan" | "auto" | "dontAsk";
   /** Explicit, narrowly scoped tool rules approved for this project. */
   allowedTools?: string[];
+  /** Inline CodeBuddy settings; used because daemon background jobs do not inherit --allowedTools. */
+  settings?: string;
   agent?: "cli" | "ptc" | "minimal" | "create" | string;
   name?: string;
   bgIsolation?: "none" | "worktree";

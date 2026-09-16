@@ -105,6 +105,7 @@ server.tool(
         effort,
         permissionMode: permissionMode(project.permissionProfile),
         allowedTools: project.allowedTools,
+        ...(project.allowedTools.length > 0 ? { settings: JSON.stringify({ permissions: { allow: project.allowedTools, disableBypassPermissionsMode: "disable" } }) } : {}),
         name: `clawbridge-${taskId}`,
         bgIsolation: "none",
       });
@@ -485,8 +486,8 @@ server.tool(
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" {
-  if (profile === "default" || profile === "acceptEdits" || profile === "auto") return profile;
+function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" | "dontAsk" {
+  if (profile === "default" || profile === "acceptEdits" || profile === "auto" || profile === "dontAsk") return profile;
   return "auto";
 }
 
