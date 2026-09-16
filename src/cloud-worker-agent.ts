@@ -159,6 +159,13 @@ export class CloudWorkerAgent {
         await this.options.control.update(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, usage: usageSnapshot(details, job), remoteState: state });
         return;
       }
+      const terminalError = terminalJobError(job);
+      if (terminalError) {
+        await this.options.control.update(taskId, "failed", {
+          ...details, usage: usageSnapshot(details, job), remoteState: "failed", error: terminalError,
+        });
+        return;
+      }
       try {
         const delivery = await this.deliver(taskId, projectId, details);
         await this.options.control.update(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery });
@@ -270,6 +277,15 @@ function stringAt(value: unknown, path: string[]): string | undefined {
 }
 function numberAt(value: unknown, path: string[]): number | undefined {
   const found = at(value, path); return typeof found === "number" && Number.isFinite(found) && found >= 0 ? found : undefined;
+}
+function terminalJobError(job: Record<string, unknown>): string | undefined {
+  const candidates = [
+    stringAt(job, ["error"]), stringAt(job, ["detail"]),
+    stringAt(job, ["output", "error"]), stringAt(job, ["output", "result"]),
+  ].filter((value): value is string => Boolean(value));
+  return candidates.find((value) =>
+    /(?:^|\b)(?:4\d\d|5\d\d)(?:\b|\s)|rate\s*limit|usage\s+(?:limit|exceeded)|频率限制|使用量.{0,12}(?:超出|限制)/i.test(value),
+  )?.slice(0, 2_000);
 }
 function at(value: unknown, path: string[]): unknown {
   let current = value;

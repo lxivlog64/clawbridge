@@ -226,6 +226,39 @@ test("post-dispatch delivery failure reports a terminal failure with job coordin
   }
 });
 
+test("a settled CodeBuddy rate-limit result is failed without attempting delivery", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-rate-limit-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let gitCalls = 0;
+  const localWorker = {
+    ...healthyGit(),
+    async git(...args: Parameters<ReturnType<typeof healthyGit>["git"]>) {
+      gitCalls += 1;
+      return healthyGit().git(...args);
+    },
+  };
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() {
+      return { id: "job-1", state: "done", settled: true, alive: true, output: { result: "429 您的使用量已超出频率限制" } };
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "failed"]);
+    assert.match(String(updates.at(-1)?.result?.error), /429/);
+    // Worktree preparation uses six git calls; delivery must not add any.
+    assert.equal(gitCalls, 6);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("Worker stops the accepted CodeBuddy job when cloud cancellation is requested", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-cancel-"));
   const task = leasedTask();
