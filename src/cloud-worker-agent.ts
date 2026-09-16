@@ -1,6 +1,6 @@
 import { CodeBuddyClient, type CodeBuddyTranscript } from "./codebuddy-client.js";
 import { CloudControlClient } from "./cloud-control-client.js";
-import type { CloudTask } from "./cloud-task-store.js";
+import type { CloudTask, CloudTaskState } from "./cloud-task-store.js";
 import { mapRemoteState } from "./lifecycle.js";
 import type { ProjectRegistry } from "./project-registry.js";
 import { LocalWorker } from "./remote-worker.js";
@@ -114,7 +114,7 @@ export class CloudWorkerAgent {
         deadlineAt: new Date(Date.now() + project.maxRuntimeMinutes * 60_000).toISOString(),
         dispatchedAt: new Date().toISOString(), requestedModel: task.requestedModel, permissionMode: taskPermissionMode,
       };
-      await this.options.control.update(task.taskId, "running", { ...accepted, usage: usageSnapshot(accepted, job) });
+      if (!await this.updateReliably(task.taskId, "running", { ...accepted, usage: usageSnapshot(accepted, job) }, signal)) return;
       await this.awaitCompletion(task.taskId, task.projectId, accepted, signal);
     } catch (error) {
       // Before a remote job id exists nothing was dispatched, so the attempt is
@@ -134,13 +134,13 @@ export class CloudWorkerAgent {
       if (await this.cancelRequested(taskId)) {
         if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job cancellation.");
         await this.options.codeBuddy.stop(details.remoteJobId);
-        await this.options.control.update(taskId, "cancelled", { ...details, usage: usageSnapshot(details), cancellation: "CodeBuddy stop requested by client" });
+        await this.updateReliably(taskId, "cancelled", { ...details, usage: usageSnapshot(details), cancellation: "CodeBuddy stop requested by client" }, signal);
         return;
       }
       if (details.deadlineAt && Date.parse(details.deadlineAt) <= Date.now()) {
         if (!this.options.codeBuddy.stop) throw new Error("CodeBuddy gateway does not support job timeout cancellation.");
         await this.options.codeBuddy.stop(details.remoteJobId);
-        await this.options.control.update(taskId, "failed", { ...details, usage: usageSnapshot(details), error: "Task exceeded its configured runtime limit." });
+        await this.updateReliably(taskId, "failed", { ...details, usage: usageSnapshot(details), error: "Task exceeded its configured runtime limit." }, signal);
         return;
       }
       let job: Record<string, unknown>;
@@ -149,9 +149,9 @@ export class CloudWorkerAgent {
       } catch (error) {
         // A transient gateway/network error does not make the accepted remote
         // job unknown. Retain the lease and coordinates, then retry polling.
-        await this.options.control.update(taskId, "running", {
+        await this.updateReliably(taskId, "running", {
           ...details, usage: usageSnapshot(details), pollWarning: message(error),
-        });
+        }, signal);
         await wait(this.pollMs, signal);
         continue;
       }
@@ -159,33 +159,33 @@ export class CloudWorkerAgent {
       if (state === "running" || state === "waiting_input") {
         const waitingPermission = await this.waitingForPermission(details);
         const activeState = waitingPermission ? "waiting_permission" : state;
-        await this.options.control.update(taskId, activeState, {
+        await this.updateReliably(taskId, activeState, {
           ...details, usage: usageSnapshot(details, job),
           ...(waitingPermission ? { blockReason: "CodeBuddy has an executable tool call waiting for permission." } : {}),
-        });
+        }, signal);
         await wait(this.pollMs, signal);
         continue;
       }
       if (state !== "succeeded") {
-        await this.options.control.update(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, usage: usageSnapshot(details, job), remoteState: state });
+        await this.updateReliably(taskId, state === "failed" || state === "cancelled" ? state : "unknown", { ...details, usage: usageSnapshot(details, job), remoteState: state }, signal);
         return;
       }
       const terminalError = terminalJobError(job);
       if (terminalError) {
-        await this.options.control.update(taskId, "failed", {
+        await this.updateReliably(taskId, "failed", {
           ...details, usage: usageSnapshot(details, job), remoteState: "failed", error: terminalError,
-        });
+        }, signal);
         return;
       }
       try {
         const delivery = await this.deliver(taskId, projectId, details);
-        await this.options.control.update(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery });
+        await this.updateReliably(taskId, "succeeded", { ...details, usage: usageSnapshot(details, job), ...delivery }, signal);
       } catch (error) {
         // The CodeBuddy job is already settled, so a verification/delivery
         // error is a known terminal failure rather than an ambiguous outcome.
-        await this.options.control.update(taskId, "failed", {
+        await this.updateReliably(taskId, "failed", {
           ...details, usage: usageSnapshot(details, job), remoteState: "succeeded", error: message(error),
-        });
+        }, signal);
       }
       return;
     }
@@ -200,6 +200,20 @@ export class CloudWorkerAgent {
       // transcript endpoint is unavailable.
       return false;
     }
+  }
+
+  /** Retain accepted-job ownership through transient control-plane outages. */
+  private async updateReliably(taskId: string, state: Exclude<CloudTaskState, "queued" | "leased">, result: Record<string, unknown>, signal?: AbortSignal): Promise<boolean> {
+    while (!signal?.aborted) {
+      try {
+        await this.options.control.update(taskId, state, result);
+        return true;
+      } catch (error) {
+        console.error(JSON.stringify({ event: "worker.update_retry", taskId, state, error: message(error), at: new Date().toISOString() }));
+        await wait(this.pollMs, signal);
+      }
+    }
+    return false;
   }
 
   private async cancelRequested(taskId: string): Promise<boolean> {
@@ -237,7 +251,7 @@ export class CloudWorkerAgent {
 }
 
 function developmentPrompt(task: CloudTask, baseSha: string, branch: string, maxRepairRounds: number): string {
-  return `Luban task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
+  return `Luban task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Use one command per Bash tool call; do not join commands with &&, ;, pipes, or command substitution because this project uses exact command allowlists. The Worker, not you, pushes the branch and creates the draft PR after verifying your commit. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
 }
 function permissionMode(profile: string | undefined): BackgroundPermissionMode {
   return profile === "default" || profile === "acceptEdits" || profile === "auto" || profile === "dontAsk" ? profile : "auto";

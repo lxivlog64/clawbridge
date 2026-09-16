@@ -220,6 +220,43 @@ test("post-dispatch polling error retains the lease and retries the same job", a
   }
 });
 
+test("a transient control-plane update failure does not make an accepted job unknown", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-control-retry-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let updateAttempts = 0;
+  const baseControl = controlFor(task, updates);
+  const control = {
+    ...baseControl,
+    async update(taskId: string, state: WorkerUpdateState, recorded?: Record<string, unknown>) {
+      updateAttempts += 1;
+      if (updateAttempts === 1) throw new Error("control plane fetch failed");
+      return baseControl.update(taskId, state, recorded);
+    },
+  };
+  const codeBuddy = {
+    async dispatchJob() { return { id: "job-1", state: "working" }; },
+    async getJob() { return { id: "job-1", state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
+      control, codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.equal(updateAttempts, 3);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "succeeded"]);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("an expired runtime limit stops CodeBuddy and reports a terminal failure", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-timeout-"));
   const task = { ...leasedTask(), state: "running" as const, result: { remoteJobId: "job-1", worktreePath: WORKTREE, baseSha: BASE_SHA, branch: BRANCH, deadlineAt: new Date(Date.now() - 1_000).toISOString() } };

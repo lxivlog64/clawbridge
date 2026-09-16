@@ -485,8 +485,8 @@ server.tool(
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" {
-  if (profile === "default" || profile === "acceptEdits" || profile === "auto") return profile;
+function permissionMode(profile: string | undefined): "default" | "acceptEdits" | "auto" | "dontAsk" {
+  if (profile === "default" || profile === "acceptEdits" || profile === "auto" || profile === "dontAsk") return profile;
   return "auto";
 }
 
