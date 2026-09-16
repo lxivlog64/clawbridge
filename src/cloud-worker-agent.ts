@@ -12,7 +12,7 @@ interface LocalExecutionWorker extends GitPreparerRemote {
   gh(worker: Parameters<LocalWorker["gh"]>[0], cwd: string, args: string[]): ReturnType<LocalWorker["gh"]>;
 }
 /** Persisted coordinates of an accepted remote job, retained even when its final outcome is unknown. */
-type BackgroundPermissionMode = "default" | "acceptEdits" | "auto";
+type BackgroundPermissionMode = "default" | "acceptEdits" | "auto" | "dontAsk";
 type JobDetails = { remoteJobId: string; worktreePath: string; baseSha: string; branch: string; deadlineAt?: string; dispatchedAt?: string; requestedModel?: string; permissionMode?: BackgroundPermissionMode };
 
 export interface CloudWorkerAgentOptions {
@@ -143,7 +143,18 @@ export class CloudWorkerAgent {
         await this.options.control.update(taskId, "failed", { ...details, usage: usageSnapshot(details), error: "Task exceeded its configured runtime limit." });
         return;
       }
-      const job = await this.options.codeBuddy.getJob(details.remoteJobId);
+      let job: Record<string, unknown>;
+      try {
+        job = await this.options.codeBuddy.getJob(details.remoteJobId);
+      } catch (error) {
+        // A transient gateway/network error does not make the accepted remote
+        // job unknown. Retain the lease and coordinates, then retry polling.
+        await this.options.control.update(taskId, "running", {
+          ...details, usage: usageSnapshot(details), pollWarning: message(error),
+        });
+        await wait(this.pollMs, signal);
+        continue;
+      }
       const state = mapRemoteState(job.state, job.status, job.alive, job.settled);
       if (state === "running" || state === "waiting_input") {
         const waitingPermission = await this.waitingForPermission(details);
@@ -181,7 +192,7 @@ export class CloudWorkerAgent {
   }
 
   private async waitingForPermission(details: JobDetails): Promise<boolean> {
-    if (details.permissionMode === "auto" || !this.options.codeBuddy.transcript) return false;
+    if (details.permissionMode === "auto" || details.permissionMode === "dontAsk" || !this.options.codeBuddy.transcript) return false;
     try {
       return hasAgedPendingExecutable(await this.options.codeBuddy.transcript(details.remoteJobId), Date.now(), this.permissionPendingMs);
     } catch {
@@ -229,13 +240,13 @@ function developmentPrompt(task: CloudTask, baseSha: string, branch: string, max
   return `Luban task ${task.taskId}\nBase SHA: ${baseSha}\nTask branch: ${branch}\n\n${task.spec}\n\nWork only in this prepared worktree. Do not create another worktree, switch branches, merge, deploy, release, or access credentials. Run at most ${maxRepairRounds} repair round(s) after the initial implementation and tests; if still failing, stop and report the blocker. Commit the completed work and report exact test commands and commit SHA.`;
 }
 function permissionMode(profile: string | undefined): BackgroundPermissionMode {
-  return profile === "default" || profile === "acceptEdits" || profile === "auto" ? profile : "auto";
+  return profile === "default" || profile === "acceptEdits" || profile === "auto" || profile === "dontAsk" ? profile : "auto";
 }
 function message(error: unknown): string { return error instanceof Error ? error.message.slice(0, 2_000) : "Unknown worker error."; }
 function jobDetails(result: Record<string, unknown> | undefined, fallbackPermissionMode?: BackgroundPermissionMode): JobDetails | undefined {
   if (!result) return undefined;
   const { remoteJobId, worktreePath, baseSha, branch, deadlineAt, dispatchedAt, requestedModel, permissionMode: storedPermissionMode } = result;
-  const restoredPermissionMode = storedPermissionMode === "default" || storedPermissionMode === "acceptEdits" || storedPermissionMode === "auto" ? storedPermissionMode : fallbackPermissionMode;
+  const restoredPermissionMode = storedPermissionMode === "default" || storedPermissionMode === "acceptEdits" || storedPermissionMode === "auto" || storedPermissionMode === "dontAsk" ? storedPermissionMode : fallbackPermissionMode;
   return typeof remoteJobId === "string" && typeof worktreePath === "string" && typeof baseSha === "string" && typeof branch === "string"
     ? { remoteJobId, worktreePath, baseSha, branch, ...(typeof deadlineAt === "string" ? { deadlineAt } : {}), ...(typeof dispatchedAt === "string" ? { dispatchedAt } : {}), ...(typeof requestedModel === "string" ? { requestedModel } : {}), ...(restoredPermissionMode ? { permissionMode: restoredPermissionMode } : {}) }
     : undefined;

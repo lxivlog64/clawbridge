@@ -66,7 +66,7 @@ test("cloud Worker reports waiting_permission and resumes after the tool is appr
   }
 });
 
-async function writeRegistry(directory: string, permissionProfile?: "default" | "acceptEdits" | "auto"): Promise<string> {
+async function writeRegistry(directory: string, permissionProfile?: "default" | "acceptEdits" | "auto" | "dontAsk"): Promise<string> {
   const registryFile = path.join(directory, "projects.json");
   await fs.writeFile(registryFile, JSON.stringify({
     schemaVersion: 1,
@@ -117,6 +117,37 @@ function healthyGit(overrides: { head?: RemoteCommandResult } = {}) {
   };
 }
 
+test("dontAsk is forwarded only when explicitly configured by the project", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-dont-ask-"));
+  const task = leasedTask();
+  const updates: RecordedUpdate[] = [];
+  let receivedMode: string | undefined;
+  const codeBuddy = {
+    async dispatchJob(input: { permissionMode?: string }) {
+      receivedMode = input.permissionMode;
+      return { id: "job-1", state: "working" };
+    },
+    async getJob() { return { id: "job-1", state: "done", settled: true }; },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
+  };
+  try {
+    const agent = new CloudWorkerAgent({
+      workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory, "dontAsk")),
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1,
+    });
+    assert.equal(await agent.once(), true);
+    assert.equal(receivedMode, "dontAsk");
+    assert.equal(updates.at(-1)?.state, "succeeded");
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("pre-dispatch worktree failure reports failed and never dispatches", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-predispatch-"));
   const task = leasedTask();
@@ -150,28 +181,39 @@ test("pre-dispatch worktree failure reports failed and never dispatches", async 
   }
 });
 
-test("post-dispatch polling error reports unknown with job coordinates", async () => {
+test("post-dispatch polling error retains the lease and retries the same job", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "clawbridge-agent-polling-"));
   const task = leasedTask();
   const updates: RecordedUpdate[] = [];
   let prompt = "";
+  let reads = 0;
   const codeBuddy = {
     async dispatchJob(input: { prompt: string }) { prompt = input.prompt; return { id: "job-1", state: "working" }; },
-    async getJob() { throw new Error("CodeBuddy gateway is unreachable."); },
+    async getJob() {
+      reads += 1;
+      if (reads === 1) throw new Error("CodeBuddy gateway is unreachable.");
+      return { id: "job-1", state: "done", settled: true };
+    },
+  };
+  const localWorker = {
+    ...healthyGit(),
+    async gh(_worker: unknown, _cwd: string, args: string[]): Promise<RemoteCommandResult> {
+      return args[1] === "view" ? command("https://github.com/owner/sample/pull/1\n") : command();
+    },
   };
   try {
     const agent = new CloudWorkerAgent({
       workerId: "worker-a", projects: ProjectRegistry.load(await writeRegistry(directory)),
-      control: controlFor(task, updates), codeBuddy, localWorker: healthyGit(), pollMs: 1,
+      control: controlFor(task, updates), codeBuddy, localWorker, pollMs: 1,
     });
     assert.equal(await agent.once(), true);
-    assert.deepEqual(updates.map((update) => update.state), ["running", "unknown"]);
+    assert.deepEqual(updates.map((update) => update.state), ["running", "running", "succeeded"]);
+    assert.match(String(updates[1]?.result?.pollWarning), /unreachable/i);
     const result = updates.at(-1)?.result;
     assert.equal(result?.remoteJobId, "job-1");
     assert.equal(result?.worktreePath, WORKTREE);
     assert.equal(result?.baseSha, BASE_SHA);
     assert.equal(result?.branch, BRANCH);
-    assert.match(String(result?.error), /unreachable/i);
     assert.match(prompt, /at most 1 repair round/i);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
